@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+#
+# Verify an installed baseline IRIX 6.5 cross toolchain.
+#
+# Compiles a trivial translation unit for each IRIX ABI and checks the ELF
+# headers with the toolchain's own readelf and objdump: big-endian MIPS, ELF32
+# with the MIPS II flags for o32, ELF32 with EF_MIPS_ABI2 and MIPS III for n32,
+# and ELF64 with the MIPS IV flags for n64. As in IRIX and historic GCC, o32
+# and n64 carry no EF_MIPS_ABI bits: n32 is the one marked by EF_MIPS_ABI2,
+# while the ISA level separates o32 from n64. The default ABI (no -mabi flag)
+# must be o32, matching the IRIX 6.5 environment.
+#
+# Usage: scripts/verify-toolchain.sh --prefix DIR
+#
+set -euo pipefail
+
+TARGET=mips-sgi-irix6.5
+PREFIX=
+
+usage() {
+	cat <<'EOF'
+Usage: scripts/verify-toolchain.sh --prefix DIR
+
+  --prefix DIR    installation prefix of the cross toolchain
+  -h, --help      show this help
+EOF
+}
+
+die() {
+	echo "FAIL: $*" >&2
+	exit 1
+}
+
+pass() {
+	echo "ok: $*"
+}
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--prefix) PREFIX=$2; shift 2 ;;
+		-h|--help) usage; exit 0 ;;
+		*) die "unknown option: $1 (try --help)" ;;
+	esac
+done
+
+[ -n "$PREFIX" ] || die "--prefix is required"
+[ -d "$PREFIX" ] || die "prefix not found: $PREFIX"
+
+CC="${PREFIX}/bin/${TARGET}-gcc"
+AS="${PREFIX}/bin/${TARGET}-as"
+LD="${PREFIX}/bin/${TARGET}-ld"
+READELF="${PREFIX}/bin/${TARGET}-readelf"
+OBJDUMP="${PREFIX}/bin/${TARGET}-objdump"
+
+for tool in "$CC" "$AS" "$LD" "$READELF" "$OBJDUMP"; do
+	[ -x "$tool" ] || die "missing tool: $tool"
+done
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+cat > "${tmpdir}/probe.c" <<'EOF'
+int add(int a, int b)
+{
+	return a + b;
+}
+EOF
+
+# elf_header_fields OBJECT; sets class/endian/machine/flags.
+elf_header_fields() {
+	local hdr
+	hdr=$("$READELF" -h "$1")
+	class=$(grep -E '^  Class:' <<<"$hdr" | awk '{print $NF}')
+	endian=$(grep -E '^  Data:' <<<"$hdr")
+	machine=$(grep -E '^  Machine:' <<<"$hdr")
+	flags_hex=$(sed -n 's/^  Flags:[[:space:]]*\(0x[0-9a-fA-F]*\).*/\1/p' <<<"$hdr")
+	[ -n "$flags_hex" ] || die "could not parse ELF flags of $1"
+	flags=$((flags_hex))
+}
+
+# check_common ABINAME OBJECT
+check_common() {
+	[ -n "$class" ] || die "$1: no ELF class in header"
+	grep -q 'big endian' <<<"$endian" || die "$1: not big-endian"
+	grep -q 'MIPS' <<<"$machine" || die "$1: not a MIPS object"
+	"$OBJDUMP" -f "$2" | grep -q 'mips' || die "$1: objdump cannot read the object"
+	"$OBJDUMP" -d "$2" >/dev/null || die "$1: objdump cannot disassemble"
+}
+
+compile() {
+	local out=$1
+	shift
+	"$CC" -c "$@" "${tmpdir}/probe.c" -o "$out"
+}
+
+# --- toolchain identity ----------------------------------------------------
+"$CC" -dumpmachine | grep -qx "$TARGET" ||
+	die "gcc -dumpmachine is not ${TARGET}"
+"$CC" --version | grep -q '15\.2\.0' || die "gcc is not 15.2.0"
+"$AS" --version | grep -q 'GNU assembler' || die "as is not GNU as"
+"$LD" --version | grep -q 'GNU ld' || die "ld is not GNU ld"
+pass "toolchain identifies as ${TARGET}, GCC 15.2.0 with GNU as/ld"
+
+EF_MIPS_ABI2=0x20
+EF_MIPS_ARCH=0xf0000000
+EF_MIPS_ARCH_2=0x10000000
+EF_MIPS_ARCH_3=0x20000000
+EF_MIPS_ARCH_4=0x30000000
+
+# --- o32 -------------------------------------------------------------------
+compile "${tmpdir}/o32.o" -mabi=32
+elf_header_fields "${tmpdir}/o32.o"
+check_common o32 "${tmpdir}/o32.o"
+[ "$class" = ELF32 ] || die "o32: expected ELF32, got ${class}"
+if (( flags & EF_MIPS_ABI2 )); then
+	die "o32: unexpected EF_MIPS_ABI2 flag"
+fi
+if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_2 )); then
+	die "o32: expected the MIPS II ISA (flags ${flags_hex})"
+fi
+pass "o32: ELF32 big-endian MIPS II (-mabi=32)"
+
+# --- default ABI -----------------------------------------------------------
+compile "${tmpdir}/default.o"
+elf_header_fields "${tmpdir}/default.o"
+check_common default "${tmpdir}/default.o"
+[ "$class" = ELF32 ] || die "default: expected ELF32, got ${class}"
+if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_2 )); then
+	die "default ABI is not o32 (flags ${flags_hex})"
+fi
+pass "default (no -mabi): o32, matching the IRIX 6.5 environment"
+
+# --- n32 -------------------------------------------------------------------
+compile "${tmpdir}/n32.o" -mabi=n32
+elf_header_fields "${tmpdir}/n32.o"
+check_common n32 "${tmpdir}/n32.o"
+[ "$class" = ELF32 ] || die "n32: expected ELF32, got ${class}"
+(( flags & EF_MIPS_ABI2 )) || die "n32: EF_MIPS_ABI2 flag missing (flags ${flags_hex})"
+if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_3 )); then
+	die "n32: expected the MIPS III ISA (flags ${flags_hex})"
+fi
+pass "n32: ELF32 big-endian MIPS III with EF_MIPS_ABI2 (-mabi=n32)"
+
+# --- n64 -------------------------------------------------------------------
+compile "${tmpdir}/n64.o" -mabi=64
+elf_header_fields "${tmpdir}/n64.o"
+check_common n64 "${tmpdir}/n64.o"
+[ "$class" = ELF64 ] || die "n64: expected ELF64, got ${class}"
+if (( flags & EF_MIPS_ABI2 )); then
+	die "n64: unexpected EF_MIPS_ABI2 flag"
+fi
+if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_4 )); then
+	die "n64: expected the MIPS IV ISA (flags ${flags_hex})"
+fi
+pass "n64: ELF64 big-endian MIPS IV (-mabi=64)"
+
+echo "all checks passed"

@@ -1,0 +1,17 @@
+The pdaxrom t-iris and t-iris6 fragments hardcode LIMITS_H_TEST = true,
+which makes GCC always wrap <limits.h> with an #include_next of the
+target's own limits.h. When no sysroot is installed yet that include_next
+finds nothing, and any configure test that includes <limits.h> fails (for
+example libgcc's autoconf C-preprocessor sanity check on hosts without
+/lib/cpp). The GCC default test, [ -f $(BUILD_SYSTEM_HEADER_DIR)/limits.h ],
+does the right thing in both cases: self-contained while headerless,
+wrapping once a sysroot with IRIX headers is present.
+
+--- a/gcc/config/mips/t-iris
++++ b/gcc/config/mips/t-iris
+@@ -11,5 +11,3 @@
+ 
+ #undef  ENDFILE_SPEC
+ #define ENDFILE_SPEC "crtend.s irix-crtn.asm"
+-
+-LIMITS_H_TEST = true

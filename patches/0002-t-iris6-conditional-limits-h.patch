@@ -1,0 +1,17 @@
+The pdaxrom t-iris6 fragment hardcodes LIMITS_H_TEST = true, which makes
+GCC wrap <limits.h> with an #include_next of the target's own limits.h.
+The GCC default test, [ -f $(BUILD_SYSTEM_HEADER_DIR)/limits.h ], does the
+right thing: self-contained while headerless, wrapping once a sysroot with
+IRIX headers is present.
+
+--- a/gcc/config/mips/t-iris6
++++ b/gcc/config/mips/t-iris6
+@@ -27,8 +27,6 @@
+ 
+ TPBIT = tp-bit.c
+ 
+-LIMITS_H_TEST = true
+-
+ tp-bit.c: $(srcdir)/config/fp-bit.c
+ 	echo '#ifdef __MIPSEL__' > tp-bit.c
+ 	echo '# define FLOAT_BIT_ORDER_MISMATCH' >> tp-bit.c

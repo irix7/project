@@ -81,6 +81,20 @@
       devShells = forAllSystems (pkgs:
         let
           inherit (mkEnv pkgs) hostTools env;
+
+          # Host libraries the emulator's Rust dependencies probe for at build
+          # time (cpal -> alsa, winit/glutin -> wayland/xkbcommon). Kept in a
+          # separate shell so the toolchain build is unaffected by them.
+          rigTools = with pkgs; [
+            pkg-config
+            alsa-lib
+            wayland
+            wayland-protocols
+            libxkbcommon
+            linuxHeaders
+            rustup
+            python3
+          ];
         in
         {
           default = pkgs.mkShell {
@@ -95,6 +109,21 @@
             shellHook = ''
               echo "IRIX 6.5 cross-toolchain baseline devshell"
               echo "Build the toolchain with: scripts/build-toolchain.sh"
+            '';
+          };
+
+          rig = pkgs.mkShell {
+            hardeningDisable = [ "all" ];
+
+            packages = hostTools ++ rigTools;
+
+            shellHook = ''
+              # v4l2-sys-mit runs bindgen, which dlopens libclang and parses
+              # the kernel uapi headers directly (not through the compiler).
+              export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
+              export BINDGEN_EXTRA_CLANG_ARGS="-isystem ${pkgs.glibc.dev}/include -isystem ${pkgs.linuxHeaders}/include"
+              echo "IRIX rig devshell (emulator host)"
+              echo "Build the rig with: scripts/rig/build-iris.sh"
             '';
           };
         });

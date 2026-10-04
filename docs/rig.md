@@ -17,7 +17,9 @@ ticket's.
 | `iris.toml`             | config: own `ci_socket`, `nvram`, serial log, 20GB disk at SCSI 1, media changer at SCSI 4 |
 | `iris.sock`             | CI control socket; never the default `/tmp/iris.sock` |
 | `disks/irix65.raw`      | the guest's boot disk, sparse until the install writes to it |
-| `media/`                | the four IRIX 6.5.7 discs, in changer order |
+| `scratch.raw`           | 64 MB CI scratch LUN at SCSI 2; `put`/`get` stage files through it as `/dev/rdsk/dks0d2s0` |
+| `media/`                | the four IRIX 6.5.7 discs, in changer order, plus the oracle media |
+| `oracle/`               | the captured MIPSpro oracle and sysroot (see `docs/oracle.md`); SGI material, never published |
 | `logs/serial.log`       | every byte the guest writes to ttyd1 |
 | `logs/driver.log`       | the bring-up driver's transcript and its own decisions |
 | `logs/evidence.txt`     | `uname -a` and `hinv` captured over `iris-ci run` |
@@ -58,3 +60,7 @@ IRIS_SOCKET=$RIG_DIR/iris.sock ./iris/target/release/iris-ci run "uname -a"
 
 The scripts export `IRIS_SOCKET`, so the same shell works for `iris-ci login`,
 `run`, `put`, `get` and the fresh-guest smoke harness that follows in issue #5.
+
+`iris-ci put`/`get` move files through the SCSI 2 scratch LUN (`scratch.raw`).
+The MIPSpro oracle install, reference build and sysroot capture build on them;
+see `docs/oracle.md`.

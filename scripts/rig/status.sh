@@ -35,6 +35,18 @@ for phase in phase-a label install verify; do
 	fi
 done
 
+while IFS=$'\t' read -r slug _ _; do
+	if [ -f "$RIG_STATE_DIR/oracle-$slug.done" ]; then
+		echo "oracle-$slug: done $(cat "$RIG_STATE_DIR/oracle-$slug.done")"
+	else
+		echo "oracle-$slug: pending"
+	fi
+done < <(python3 "$RIG_REPO_ROOT/scripts/rig/oracle-driver.py" sets)
+
+if [ -d "$RIG_ORACLE_DIR" ]; then
+	echo "oracle: $RIG_ORACLE_DIR"
+fi
+
 if [ -f "$RIG_DISK" ]; then
 	echo "disk: $(du -h "$RIG_DISK" | cut -f1) on disk"
 else

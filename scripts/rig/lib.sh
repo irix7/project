@@ -35,7 +35,9 @@ export RIG_SOCKET="$RIG_DIR/iris.sock"
 export RIG_CONFIG="$RIG_DIR/iris.toml"
 export RIG_NVRAM="$RIG_DIR/nvram.bin"
 export RIG_DISK="$RIG_DIR/disks/irix65.raw"
+export RIG_SCRATCH="$RIG_DIR/scratch.raw"
 export RIG_MEDIA_DIR="$RIG_DIR/media"
+export RIG_ORACLE_DIR="$RIG_DIR/oracle"
 export RIG_LOG_DIR="$RIG_DIR/logs"
 export RIG_SERIAL_LOG="$RIG_LOG_DIR/serial.log"
 export RIG_STDOUT_LOG="$RIG_LOG_DIR/iris-stdout.log"
@@ -61,6 +63,10 @@ RIG_INSTALL_MEDIA=(
 	"$RIG_MEDIA_FOUNDATION_2"
 	"$RIG_MEDIA_OVERLAYS_2"
 )
+
+# Oracle media (issue #3) are spelled in scripts/rig/oracle-driver.py's
+# ORACLE_SETS, the single list that oracle.sh and status.sh walk; they live in
+# $RIG_MEDIA_DIR beside the install media and are never published.
 
 rig_log() {
 	printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"

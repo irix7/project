@@ -5,7 +5,9 @@
 # The config is deliberately self-contained: own socket, own NVRAM, own serial
 # log and own disk. The media are the four IRIX 6.5.7 install discs in changer
 # order on SCSI ID 4 (the bootable Installation Tools + Overlays disc first).
-# The MAC is distinct from any other emulator instance on this host.
+# SCSI ID 2 is the CI scratch volume, which `iris-ci put`/`get` address as
+# /dev/rdsk/dks0d2s0 in the guest. The MAC is distinct from any other emulator
+# instance on this host.
 #
 # Usage: scripts/rig/new-rig.sh [--disk-mb N]
 #
@@ -62,6 +64,11 @@ cpu = "r4400"
 [scsi.1]
 path  = "$RIG_DISK"
 cdrom = false
+
+[scsi.2]
+path     = "$RIG_SCRATCH"
+scratch  = true
+size_mb  = 64
 
 [scsi.4]
 path = "$RIG_MEDIA_DIR/${RIG_MEDIA_TOOLS_OVERLAYS_1}"

@@ -8,7 +8,7 @@ A toolchain and rebuild project for IRIX 6.5.7m on the SGI Indy: reproduce the o
 Reproducing IRIX 6.5.7m's own components (userland, libraries, firmware, kernel) from its source tree with the new toolchain, without changing operating-system behaviour. The project's first deliverable.
 
 **Modernised fork**:
-The later deliverable that changes the rebuilt code (driver replacements, modernisation work) to make a new IRIX-derived OS version. Depends on the stock rebuild succeeding.
+The later deliverable that changes the rebuilt code (driver replacements, modernisation work) to make a new IRIX-derived OS version. Depends on the stock rebuild succeeding. IRIX Community Edition and its NewEOE utilities are the community's prior art for this phase and a vocabulary reference, not a dependency of the stock rebuild.
 
 **Target**:
 The toolchain's output platform: `mips-sgi-irix6.5`, ELF32 big-endian MIPS III/IV, with o32, n32 and n64 ABIs.

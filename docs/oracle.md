@@ -11,6 +11,11 @@ binaries and logs are SGI material and stay under `$RIG_ORACLE_DIR`
 (default `/mnt/europa/sgi-toolchain-scratch/rig/oracle`). Only the scripts are
 in the repo.
 
+Issue #7 extends the same rig to the first real tree command: `hinv` rebuilt
+natively with MIPSpro and the tree's smake rules, captured under
+`$RIG_ORACLE_DIR/hinv-reference/` by `scripts/rig/hinv-reference.sh`; see
+`docs/reference-hinv.md`.
+
 ## Media
 
 Three ISOs, copied into `$RIG_MEDIA_DIR` beside the install media and never

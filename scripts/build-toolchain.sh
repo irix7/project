@@ -16,9 +16,11 @@
 # applied; -mabi=32/-mabi=n32/-mabi=64 still select all three multilibs.
 #
 # No SGI or licence-restricted material is downloaded or installed; a target
-# sysroot is optional and supplied by the caller with IRIX_SYSROOT. That path
-# follows pdaxrom but is not exercised until the sysroot capture (issue #3)
-# lands, so the verified baseline is the sysroot-less C compiler below.
+# sysroot is optional and supplied by the caller with IRIX_SYSROOT. With one,
+# binutils is configured with the matching --with-sysroot so the cross's links
+# resolve the capture's crt1.o, libc.so and libm.so (the smoke harness's
+# dynamic-first model, ADR-0006); without one, the verified baseline is the
+# sysroot-less C compiler below.
 #
 # Usage: scripts/build-toolchain.sh [options]
 #
@@ -245,8 +247,27 @@ configure_and_make() {
 # ---------------------------------------------------------------- binutils --
 
 build_binutils() {
+	local args=(
+		--prefix="$PREFIX"
+		--target="$TARGET"
+		--enable-multilib
+		--disable-nls
+		--disable-werror
+		--disable-gdb
+		--disable-sim
+		--disable-gprof
+		--disable-gold
+	)
+	# Without this, the installed ld rejects the --sysroot that a
+	# sysroot-configured GCC passes it ("this linker was not configured to
+	# use sysroots"), even though its --help advertises the option.
+	if [ -n "$IRIX_SYSROOT" ]; then
+		args+=("--with-sysroot=${IRIX_SYSROOT}")
+	fi
+
 	local stamp=${STAMPS}/binutils.installed
-	if [ -f "$stamp" ] && [ -x "${PREFIX}/bin/${TARGET}-as" ]; then
+	if [ -f "$stamp" ] && [ -x "${PREFIX}/bin/${TARGET}-as" ] &&
+		[ "$(cat "${stamp}.options" 2>/dev/null || true)" = "${args[*]}" ]; then
 		note "binutils ${BINUTILS_VERSION} already installed"
 		return 0
 	fi
@@ -259,22 +280,11 @@ build_binutils() {
 	local src="${SRC_DIR}/binutils-${BINUTILS_VERSION}"
 	apply_patches "$src" "${PATCH_FILES[@]}"
 
-	local args=(
-		--prefix="$PREFIX"
-		--target="$TARGET"
-		--enable-multilib
-		--disable-nls
-		--disable-werror
-		--disable-gdb
-		--disable-sim
-		--disable-gprof
-		--disable-gold
-	)
-
 	configure_and_make "$src" "${BUILD_DIR}/binutils" \
 		"${LOGS}/binutils.log" "${args[@]}"
 
 	[ -x "${PREFIX}/bin/${TARGET}-as" ] || die "binutils install incomplete"
+	printf '%s\n' "${args[*]}" > "${stamp}.options"
 	touch "$stamp"
 }
 
@@ -289,6 +299,16 @@ build_gcc() {
 	if [ -n "$isl" ]; then extra+=("--with-isl=${isl}"); fi
 	if [ -n "$IRIX_SYSROOT" ]; then
 		extra+=("--with-sysroot=${IRIX_SYSROOT}")
+		# libatomic's configure links a pthread probe against -lpthread.
+		# The captured 6.5.7m sysroot has pthread.h (so libgcc selects
+		# gthr-posix) but no libpthread.so until issue #18 extends
+		# sysroot.files, so libatomic cannot build yet. Require both the
+		# default-o32 and n32 captures (ADR-0006 names both); libatomic
+		# returns automatically once they are present.
+		if [ ! -e "${IRIX_SYSROOT}/usr/lib/libpthread.so" ] ||
+			[ ! -e "${IRIX_SYSROOT}/usr/lib32/libpthread.so" ]; then
+			extra+=("--disable-libatomic")
+		fi
 	else
 		# No sysroot yet (see issue #3): build libgcc in freestanding
 		# single-threaded mode so that it does not need target headers.

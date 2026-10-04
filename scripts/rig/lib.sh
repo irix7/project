@@ -92,3 +92,16 @@ ic() {
 rig_running() {
 	[ -S "$RIG_SOCKET" ] && ic ping >/dev/null 2>&1
 }
+
+# The shared guest lock (issues #5 and #7). iris-ci and the serial driver are
+# single-session tools, so a client that ships, runs or pulls files takes this
+# lock for the whole transaction rather than per call. One path and timeout
+# for every client; smoke.sh and hinv-reference.sh use rig_with_guest_lock.
+RIG_GUEST_LOCK=${RIG_GUEST_LOCK:-$RIG_DIR/guest.lock}
+RIG_GUEST_LOCK_TIMEOUT=${RIG_GUEST_LOCK_TIMEOUT:-3600}
+export RIG_GUEST_LOCK RIG_GUEST_LOCK_TIMEOUT
+
+# rig_with_guest_lock COMMAND...: run a whole guest transaction under the lock.
+rig_with_guest_lock() {
+	flock -w "$RIG_GUEST_LOCK_TIMEOUT" "$RIG_GUEST_LOCK" "$@"
+}

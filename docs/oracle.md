@@ -86,6 +86,16 @@ objects, `libc`/`libm` link libraries and their `/lib*` runtime DSOs. The
 guest's `/usr/lib*` trees also hold hundreds of product libraries; those are
 not part of this capture.
 
+## Known limits of this oracle
+
+- **No static libc.** IRIX 6.5 ships `/usr/lib/libm.a` but no `/usr/lib/libc.a`,
+  and `cc -non_shared` fails on `/usr/lib32/nonshared/crt1.o`; the sysroot
+  manifest lists no `libc.a` for the same reason. The smoke harness's link
+  model is issue #19.
+- **No n64 execution.** The IP22/R4400 kernel is 32-bit, so n64 binaries link
+  (with `-L/usr/lib64/abi`) but do not execute; the capture is o32 + n32 only.
+  n64 is a static-compare target on this rig — issue #20.
+
 ## MIPSpro quirks worth remembering
 
 - `cc` on this guest defaults to **n32**, so every ABI is named explicitly.

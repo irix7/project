@@ -37,3 +37,9 @@ The emulated IRIX system on which test binaries are executed: a fresh IRIX 6.5.7
 **Rig**:
 The emulator, disks, console and control interface that run the guest and move test binaries in and out.
 _Avoid_: emulator (when the whole setup is meant)
+
+**Smoke harness**:
+The script that compiles a test program against the captured sysroot, runs it
+on the guest and diffs stdout against expected output; the project's primary
+testing seam, dynamic-first per ADR-0006.
+_Avoid_: test runner

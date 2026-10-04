@@ -90,8 +90,9 @@ not part of this capture.
 
 - **No static libc.** IRIX 6.5 ships `/usr/lib/libm.a` but no `/usr/lib/libc.a`,
   and `cc -non_shared` fails on `/usr/lib32/nonshared/crt1.o`; the sysroot
-  manifest lists no `libc.a` for the same reason. The smoke harness's link
-  model is issue #19.
+  manifest lists no `libc.a` for the same reason. The smoke harness therefore
+  links dynamically against this capture (ADR-0006); a static proof waits on
+  the rebuilt runtime (#9).
 - **No n64 execution.** The IP22/R4400 kernel is 32-bit, so n64 binaries link
   (with `-L/usr/lib64/abi`) but do not execute; the capture is o32 + n32 only.
   n64 is a static-compare target on this rig — issue #20.

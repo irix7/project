@@ -1,0 +1,15 @@
+# Binutils 2.47 IRIX series (issue #21): candidate, not yet selected.
+#
+# scripts/build-toolchain.sh still builds the 2.47 vanilla recipe. These
+# patches are the re-derived IRIX fixes built and handed to the
+# integrator for the controlled guest smoke; see docs/binutils.md for the
+# candidate prefixes, signatures and provenance. Once a candidate passes
+# o32 and n32 on the guest, the selector's 2.47 recipe moves from
+# `vanilla` to this series and any unused candidate patch is dropped.
+#
+# Apply with `patch -p1` from the binutils-2.47 source root, in order.
+# Provenance: SGUG-RSE binutils2_23.sgifixes.patch, onre/binutils-gdb
+# binutils-2_44-irix (4b55be5884a3) and upstream commits 9e8082845f85 and
+# 3be08ea4728b.
+0001-irix-got-local-restoration.patch
+0002-irix-gp-global-absolute.patch

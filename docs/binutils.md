@@ -1,12 +1,14 @@
 # Binutils for the IRIX cross (issue #21)
 
-`scripts/build-toolchain.sh` builds **vanilla GNU binutils 2.47** for
-`mips-sgi-irix6.5` by default; `--binutils 2.20.1` still selects the
-pdaxrom-patched seed fallback unchanged, for bisecting and for reproducing
-pre-2.47 prefixes. The selector, its pins and the build identity are
-described in [toolchain.md](toolchain.md); this document records the
-vanilla-first evidence for 2.47, the comparison against the community
-candidate fixes and the decision that 2.47 carries no patches.
+`scripts/build-toolchain.sh` builds GNU binutils 2.47 for
+`mips-sgi-irix6.5`; vanilla-first was tried and **rejected in the
+controlled guest smoke** (a vanilla 2.47 o32 hello dies at startup), so a
+re-derived IRIX series now lives in `patches/binutils-2.47/` as a
+candidate under guest validation. Until a candidate passes o32 and n32 in
+the guest, the selector still builds the vanilla recipe and
+`--binutils 2.20.1` remains the known-good pdaxrom seed fallback. This
+document records the pins, the in-guest divergence, the upstream
+archaeology and the candidate signatures.
 
 ## Pin and provenance
 
@@ -17,202 +19,185 @@ candidate fixes and the decision that 2.47 carries no patches.
 | sha256 | `154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff` |
 | sha512 | `3126a1064374d8da40d4d70630c204ed1e75d542c447d53fca9778c7ceff095c28e9b445e15a313fef9729082d7966471ee6b5b715d479aa6d568528743e1d98` |
 | checksum list | `https://sourceware.org/pub/binutils/releases/sha512.sum` |
+| SGUG reference | binutils 2.23.2 + `binutils2_23.sgifixes.patch`, built for comparison |
 
-The sha256 was computed from the official tarball after checking it against
-the official sha512 list above. The 2.20.1 pin and its two pdaxrom patches
-(`binutils-2.20.1-irix.diff`, `binutils-2.20.1-arm64-build-fix.diff`, both
-pinned by sha256) are unchanged.
+The 2.20.1 pin and its two pdaxrom patches are unchanged. The SGUG
+2.23.2 reference (`binutils-2.23.2.tar.bz2`,
+sha256 `fe914e56fed7a9ec2eb45274b1f2e14b0d8b4f41906a5194eac6883cfe5c1097`;
+`binutils2_23.sgifixes.patch`,
+sha256 `03dd9d2d7d9ccee1f716291e67333ad4a4192a081ffd563e3a10abf27ef72ef9`)
+is a diagnostic build in scratch, not a project dependency; SGUG's own
+toolchain is the known-good modern IRIX binutils deployment.
 
-`gas`, `ld`, `bfd` and the binutils programs for the target configure from
-the unmodified release: upstream still ships the binutils IRIX target
-stanzas, and `ld -V` reports the `elf32bsmip` (o32), `elf32bmipn32` (n32)
-and `elf64bmip` (n64) emulations. No target restoration patch is needed,
-which disproves the removal premise at the build level as well as at
-configure time. n64 is emitted but, per ADR-0003, outside acceptance
-scope.
+`gas`, `ld` and `bfd` configure and build from the release for the target,
+so the original removal premise stays disproved at build level; only the
+runtime divergence below needs patches.
 
-The build was:
+## In-guest divergence (integrator evidence)
 
-```sh
-nix develop --command bash -c \
-	'../binutils-2.47/configure \
-		--prefix=<work>/prefix \
-		--target=mips-sgi-irix6.5 \
-		--enable-multilib \
-		--disable-nls \
-		--disable-werror \
-		--disable-gdb \
-		--disable-sim \
-		--disable-gprof \
-		--disable-gold \
-		--with-sysroot=<capture> && make -j"$(nproc)" && make install'
-```
+Controlled guest smokes of `oracle/hello.c` linked with the 16.2 cross,
+using the generated specs file to select the assembler and linker:
 
-The installed tools identify as `GNU assembler (GNU Binutils)
-2.47.20260726` and `GNU ld (GNU Binutils) 2.47.20260726`. Unlike 2.20.1,
-2.47's `ld` accepts `--sysroot` in any build; `--with-sysroot` is kept in
-the recipe so the default matches the 2.20.1 path, not because 2.47
-requires it.
+| variant | result |
+| --- | --- |
+| baseline prefix (configured 2.20.1 as/ld) | passes o32 |
+| control specs pointing at the configured 2.20.1 | passes o32 |
+| vanilla 2.47 | links, guest dies with SIGSEGV (exit 139) before output |
+| onre's partial port (prefix-2.47-onre) | guest dies with SIGBUS (exit 138) |
+
+The same o32 hello's readelf signature:
+
+| variant | `_gp` | `_gp_disp` | MIPS_LOCAL_GOTNO | MIPS_GOTSYM | MIPS_HIPAGENO | MIPS_SYMTABNO |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2.20.1 baseline | `10008000` NOTYPE GLOBAL ABS | present (symtab) | 9 | 0xb | 7 | 24 |
+| SGUG 2.23.2 reference | `10008000` NOTYPE LOCAL ABS | present (symtab) | 9 | 0xb | 7 | 24 |
+| vanilla 2.47 | `10008000` NOTYPE LOCAL, section 18 (.got) | absent | 13 | 0xd | 11 | 22 |
+| onre 2.44 partial port | `10008000` NOTYPE LOCAL, section 18 (.got) | absent | 9 | 0x9 | 7 | 22 |
+
+`.MIPS.options` and `.reginfo` are byte-identical across all of these
+(gp value `0x10008000` for o32, `0x10018b40` for n32), so the gp *value*
+is not the divergence; the symbol binding and GOT/symbol-table shape are.
+Note that `_gp` and `_gp_disp` appear only in `.symtab`, never in
+`.dynsym`, in the working 2.20.1 and SGUG links; the loaded image differs
+in the GOT/dynamic tags and in the dynamic symbol table.
+
+## Upstream archaeology
+
+### `_gp` was made hidden (2012)
+
+Commit `9e8082845f85cc1cb6be434177aa4d59e00663ff` ("ld/: Make _gp
+hidden", Maciej W. Rozycki, 2012-08-06) wrapped `_gp` in `HIDDEN()` in
+`ld/emulparams/elf32bmip.sh`, `ld/emulparams/elf32bmipn32-defs.sh`,
+`ld/emulparams/elf32mipswindiss.sh` and `ld/scripttempl/mips.sc`. Linux
+MIPS does not want `_gp` exported; IRIX's runtime linker and the classic
+linker contract expect the absolute `_gp`. The change post-dates nothing
+in SGUG's patch (SGUG 2.23.2 has hidden `_gp`, but still ABS and working
+on IRIX), yet 2.47 additionally emits it section-relative in `.got`,
+which the candidate series restores to `GLOBAL ABS`.
+
+### `_gp_disp` left the symbol tables (2018)
+
+Commit `3be08ea4728b56d35e136af4e6fd3086ade17764` ("BFD: Prevent writing
+the MIPS _gp_disp symbol into symbol tables", Simon Atanasyan, 2018-05-03)
+removed the `_gp_disp` special cases from `mips_elf_output_extsym` and
+`_bfd_mips_elf_finish_dynamic_symbol` and added
+`elf32_mips_fixup_symbol`, which hides `_gp_disp` for o32. In the working
+2.20.1 output `_gp_disp` is undefined GLOBAL in `.symtab` only (it is not
+in `.dynsym` and not loaded); 2.47 drops the entry. A scratch probe
+reverted the commit's three changes under `SGI_COMPAT`/IRIX and the
+`.symtab` entry still did not reappear (the observable removal has a
+different, generic cause), and because `.symtab` is not part of the
+loaded image the reverted hunks could not be demonstrated. No hunk for
+`_gp_disp` is therefore carried; this is recorded here so a future
+investigation starts from the probe result rather than the commit alone.
+
+### GOT-local classification (SGUG 2.23, onre 2.44)
+
+`sgidevnet/sgug-rse`'s `packages/binutils/binutils2_23.sgifixes.patch`
+restricts the local GOT to forced-local and undefined symbols in
+`mips_elf_resolve_final_got_entries` and adds a `check_forced` argument
+to `mips_elf_local_relocation_p`, used from
+`mips_elf_calculate_relocation`'s `local_p`. `onre/binutils-gdb` branch
+`binutils-2_44-irix` (commit `4b55be5884a3`) re-derived only the predicate
+half as `mips_use_local_got_p` (`mips_is_entry_forced_local`); the
+candidate series carries both halves, mapped to 2.47 where
+`mips_elf_count_got_symbols` and `mips_elf_calculate_relocation` consume
+`mips_use_local_got_p`.
+
+### Other post-SGUG deltas, not patched
+
+- `DT_MIPS_RLD_MAP_REL` (`a5499fa464`, "Add support for
+  DT_MIPS_RLD_MAP_REL.") is emitted for every executable in 2.47; SGUG
+  2.23.2 predates it.
+- `.MIPS.abiflags`/`PT_MIPS_ABIFLAGS` (`351cdf24d2`, "[MIPS] Implement
+  O32 FPXX, FP64 and FP64A ABI extensions", 2014) is also newer than the
+  SGUG reference.
+- Modern ld no longer emits the local hidden `.dynsym` entries
+  `__TMC_END__`/`__DTOR_END__` (MIPS_SYMTABNO 22 vs 24, MIPS_GOTSYM 0x9
+  vs 0xb), an as-yet unidentified generic change.
+
+These remain deliberate no-patch verdicts until a candidate's guest smoke
+shows one of them matters.
+
+## Candidate series
+
+`patches/binutils-2.47/series` (candidate only; not selected by the build
+script yet) applies with `patch -p1` from the binutils-2.47 source root:
+
+| patch | change |
+| --- | --- |
+| `0001-irix-got-local-restoration.patch` | SGUG's forced-local GOT predicate plus the `check_forced` relocation-time half |
+| `0002-irix-gp-global-absolute.patch` | `_gp = ABSOLUTE (ALIGN (16) + 0x7ff0)` (not `HIDDEN`) in the o32 and n32 emulation scripts |
+
+Three prefixes were built in scratch for the controlled guest smoke, each
+with a generated specs file (the spec routes the driver's `as`/`ld` to the
+candidate prefix as described in [toolchain.md](toolchain.md)):
+
+| candidate | patches | prefix | specs |
+| --- | --- | --- | --- |
+| a | 0001 | `.scratch/binutils-build/prefix-cand-a` | `.scratch/binutils-build/diag/cand-a.specs` |
+| b | 0002 | `.scratch/binutils-build/prefix-cand-b` | `.scratch/binutils-build/diag/cand-b.specs` |
+| c | 0001+0002 | `.scratch/binutils-build/prefix-cand-c` | `.scratch/binutils-build/diag/cand-c.specs` |
+
+Signatures of `oracle/hello.c` linked through each candidate (`_gp`
+binding, `.symtab`; GOT tags from `.dynamic`; o32 has MIPS_HIPAGENO, n32
+is NEWABI and has none):
+
+| candidate | ABI | `_gp` | `_gp_disp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | SYMTABNO |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| a | o32 | `10008000` LOCAL section .got | absent | 9 | 0x9 | 7 | 22 |
+| a | n32 | `10018b40` LOCAL section .got | absent | 12 | 0x9 | – | 22 |
+| b | o32 | `10008000` GLOBAL ABS | absent | 13 | 0xd | 11 | 22 |
+| b | n32 | `10018b40` GLOBAL ABS | absent | 16 | 0xd | – | 22 |
+| c | o32 | `10008000` GLOBAL ABS | absent | 9 | 0x9 | 7 | 22 |
+| c | n32 | `10018b40` GLOBAL ABS | absent | 12 | 0x9 | – | 22 |
+
+Candidate a restores the SGUG GOT counts (9/0xb shape, 22-entry dynsym),
+but keeps `_gp` local in `.got`, exactly like onre's SIGBUS build.
+Candidate b restores the classic `_gp` symbol but keeps vanilla's GOT
+classification. Candidate c combines both. All three pass the guest-free
+regression; the guest smoke decides.
 
 ## Host verification
 
-`scripts/test-binutils-vanilla.sh` is the committed, guest-free regression.
-It takes a cross prefix and a candidate binutils prefix (defaults: the
-cross prefix itself, since `build-toolchain.sh` installs both into one
-prefix) and runs three probes:
+`scripts/test-binutils-vanilla.sh` remains the committed, guest-free
+regression. It checks identity, o32/n32 emission (ELF headers and
+relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
+libc/libm) against a candidate binutils prefix through a generated specs
+file. All three candidates pass it with `--binutils-version 2.47`, and the
+script still passes against 2.20.1 with `--binutils-version 2.20.1`.
 
-1. **identity**: `as`/`ld` report GNU binutils 2.47 and the three IRIX
-   emulations.
-2. **emission**: a header-free probe assembles for o32 and n32; ELF
-   class/endianness/ISA flags and the canonical MIPS relocation types are
-   checked (`R_MIPS_CALL16`, `R_MIPS_GOT16`, HI16/LO16 for o32;
-   `R_MIPS_GOT_DISP`, `R_MIPS_GPREL16`, `R_MIPS_CALL16` for n32).
-3. **link**: `oracle/hello.c` links against the captured sysroot for both
-   ABIs; the driver trace must name the candidate `ld` and the IRIX
-   startfiles (`crt1.o`, `irix-crti.o`, `crtbegin.o`, `crtend.o`,
-   `irix-crtn.o`), and the binary must request `/usr/lib/libc.so.1` (o32)
-   or `/usr/lib32/libc.so.1` (n32) and depend on `libc.so.1` and
-   `libm.so`.
-
-Run against the vanilla 2.47 prefix and the 16.2 cross:
-
-```sh
-scripts/test-binutils-vanilla.sh \
-	--gcc-prefix .scratch/toolchain-16.2.0/prefix \
-	--binutils-prefix <binutils-2.47-prefix>
-```
-
-Result on the build host: all checks pass — o32 emits ELF32 big-endian
-MIPS II, n32 emits ELF32 big-endian MIPS III with `EF_MIPS_ABI2`, and both
-link dynamically with the expected interpreter and startfiles. The same
-script also passes against the 2.20.1 prefix with
-`--binutils-version 2.20.1`, so the fallback path stays exercised
-host-side.
-
-### Why the regression generates a specs file
-
-A cross built by `build-toolchain.sh` bakes the absolute
-`--with-as`/`--with-ld` paths into the driver: `find_a_program` returns
-`DEFAULT_ASSEMBLER`/`DEFAULT_LINKER` before searching `-B` directories, and
-`collect2` prefers `DEFAULT_LINKER` the same way. `-B<binutils-prefix>/bin`
-therefore does **not** redirect `as`/`ld` for such a cross; this was
-verified by probing a `-B` directory holding wrappers (the compiled-in
-paths were still invoked). To exercise a candidate binutils prefix without
-rebuilding GCC, the regression rewrites the `*invoke_as` and `*linker` specs
-from `gcc -dumpspecs` and proves via `-v` traces that the candidate tools
-ran. `--write-specs FILE` keeps that file for the guest smoke:
-
-```sh
-scripts/smoke.sh --prefix <gcc-prefix> \
-	--cflags "-specs=FILE -lm" oracle/hello.c scripts/smoke/hello.expected
-```
-
-The durable path is still a prefix whose GCC was configured against the
-selected binutils: `scripts/build-toolchain.sh --binutils 2.47` installs
-2.47 and then configures GCC's `--with-as`/`--with-ld` at the new tools.
-When run in a work directory whose GCC was already built against 2.20.1,
-only binutils is rebuilt and the GCC stanza is reused — its configure
-arguments name the same paths and its compiled behaviour does not depend on
-the binutils release beyond the GNU-as/ld feature probes already made.
-
-## onre's candidate fixes versus upstream 2.47
-
-The public candidate lives in `onre/binutils-gdb`, branch
-`binutils-2_44-irix`, one commit
-`4b55be5884a302da12b9a96b92134e3aaabf609a` (2025-04-20), "Added
-functionality equivalent to the SGUG-RSE binutils2_23.sgifixes.patch". It
-adds a `mips_is_entry_forced_local` helper and restricts
-`mips_use_local_got_p`'s "binds locally" branch:
-
-```c
--  if (h->got_only_for_calls
--      ? SYMBOL_CALLS_LOCAL (info, &h->root)
--      : SYMBOL_REFERENCES_LOCAL (info, &h->root))
-+  if ((h->got_only_for_calls ? SYMBOL_CALLS_LOCAL(info, &h->root)
-+                             : SYMBOL_REFERENCES_LOCAL(info, &h->root))
-+      && mips_is_entry_forced_local(h))
-     return true;
-```
-
-The stated origin is `sgidevnet/sgug-rse`'s
-`packages/binutils/binutils2_23.sgifixes.patch` against 2.23.2 (143 lines).
-That patch's surviving semantic hunk is the same inversion: only
-forced-local symbols (plus undefined symbols, `dynindx == -1`) belong in
-the local GOT, where upstream also puts any symbol that binds locally. In
-2.47 the decision points are `mips_elf_count_got_symbols` ("Make a final
-decision about whether the symbol belongs in the local or global GOT") and
-`mips_elf_calculate_relocation`, both routed through
-`mips_use_local_got_p`; the onre port is therefore a faithful
-re-derivation of the SGUG intent against the refactored code. The rest of
-the SGUG patch is obsolete:
-
-| SGUG 2.23 hunk | 2.47 status |
-| --- | --- |
-| `bfd.c` NULL `elf_section_data` guard | not upstream; malformed-input robustness only, not carried |
-| `.rld_map` NULL guard after the assert | not upstream; malformed-input robustness only, not carried |
-| `readelf.c` `__sgi` printf workaround | superseded; native-IRIX host only (out of scope) |
-| `ld/configure.tgt` `NATIVE_LIB_DIRS` | native IRIX ld only (our links are host-driven) |
-| `libtool.m4` rpath nativisation | native build only |
-| `pex-unix.c` `pid_t` return, `config.guess` aarch64 | fixed upstream long before 2.47 |
-
-Upstream 2.47 does not contain the forced-local restriction. A probe was
-run to demonstrate what the candidate changes on 2.47: an n32 object with
-a defined, preemptible global links as a shared library with
-`-shared -nostdlib -Wl,-Bsymbolic`. Vanilla 2.47 keeps the symbol in the
-local GOT (`MIPS_LOCAL_GOTNO 4`, `MIPS_GOTSYM 0x6`); the onre build moves
-it to the global GOT (`MIPS_LOCAL_GOTNO 3`, `MIPS_GOTSYM 0x5`, `.got`
-words reordered). The divergence is real but only demonstrates that the
-patch changes GOT classification; it does not show vanilla 2.47 failing
-for IRIX. Under the vanilla-first policy the fix is therefore **not
-applied**: it is a candidate to re-derive (both hunks apply to 2.47 at a
-+66-line offset with no fuzz) if the controlled guest smoke or the MIPSpro
-oracle shows the SGUG-class failure. Recorded decision: **no patches,
-vanilla 2.47**, with `--binutils 2.20.1` as the fallback.
+The prefixes and specs above are scratch artefacts (`.scratch/` is
+ignored); the in-repo series is reproducible with the same `configure`
+line as the vanilla recipe plus `patch -p1` in series order.
 
 ## Guest smoke for the integrator
 
-These are the controlled in-guest checks, to run on the rig; nothing here
-was run in a guest by this branch. They are guest evidence, distinct from
-the synthetic host probes above.
-
-Against a prefix whose GCC consumes the 2.47 tools (durable path):
+For each candidate, with the existing 16.2 cross and the candidate specs
+file; the specs path is substituted per candidate:
 
 ```sh
-nix develop --command bash -c \
-	'scripts/build-toolchain.sh --binutils 2.47 \
-		--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot \
-		--languages c'
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-lm" oracle/hello.c scripts/smoke/hello.expected
-scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-lm" oracle/hello.c scripts/smoke/hello.expected
-```
-
-Against the existing 2.20.1-built prefix and a separate 2.47 binutils
-prefix (one variable changed):
-
-```sh
-scripts/test-binutils-vanilla.sh \
-	--gcc-prefix .scratch/toolchain-16.2.0/prefix \
-	--binutils-prefix <binutils-2.47-prefix> \
-	--write-specs /tmp/binutils-2.47.specs
-scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-specs=/tmp/binutils-2.47.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-c.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-specs=/tmp/binutils-2.47.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-c.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 
-Both ABIs must print the expected `oracle/hello.expected` output. A pass
-closes the "controlled guest smoke" criterion for #21 with 2.47 vanilla; a
-failure should be recorded against the candidate fix above before any
-patch is carried.
+The integrator runs the controlled guest smoke; a candidate must pass o32
+and n32 before it is folded in. If a candidate passes, the selector's 2.47
+recipe moves from `vanilla` to this series, `scripts/lib/test-build-identity.py`
+is updated for the recipe name, `scripts/test-binutils-vanilla.sh` naming
+and docs follow the patched 2.47, and the unused candidate patches are
+dropped.
 
 ## Publication
 
-`irix7/binutils-gdb` receives the series (or, as here, the explicit
-no-patch result) as a maintainer push step; this branch does not push. The
-provenance to carry across is the pin table above, the onre commit and the
-SGUG origin, and this document as the decision record. No SGI or
-licence-restricted material is involved; binutils is GPL.
+`irix7/binutils-gdb` receives the surviving minimal series (or the
+hunks' no-patch verdicts) as a maintainer push step; this branch does not
+push. Provenance to carry across: the pins above, SGUG-RSE
+`binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, upstream commits
+`9e8082845f85` and `3be08ea4728b`, and this document as the decision
+record. No SGI or licence-restricted material is involved; binutils is
+GPL.

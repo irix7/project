@@ -1,0 +1,156 @@
+Restore SGUG's IRIX GOT-local classification against binutils 2.47
+
+The guest smoke with vanilla 2.47 dies at startup (SIGSEGV for a plain
+o32 hello), and onre's partial port of SGUG-RSE's binutils2_23.sgifixes
+patch (binutils-gdb branch binutils-2_44-irix, 4b55be5884a3) still dies
+with SIGBUS. Onre re-derived only the first semantic hunk:
+mips_use_local_got_p must put only forced-local symbols in the local GOT,
+so that locally-binding but preemptible symbols stay in the global GOT
+where IRIX rld can fill them. This patch re-derives the second hunk as
+well: SGUG's check_forced parameter on mips_elf_local_relocation_p and
+the relocation-time local_p test in mips_elf_calculate_relocation, where
+2.47's unconditional mips_use_local_got_p also claims dynindx == -1 and
+executable static-relocation symbols.
+
+Provenance: SGUG-RSE packages/binutils/binutils2_23.sgifixes.patch
+(against binutils 2.23.2: the mips_elf_resolve_final_got_entries hunk and
+the mips_elf_local_relocation_p/local_p hunks); onre/binutils-gdb
+4b55be5884a302da12b9a96b92134e3aaabf609a for the mips_use_local_got_p
+half. Re-derived against binutils 2.47 (sourceware binutils-gdb).
+
+Effect on the o32 hello signature: MIPS_LOCAL_GOTNO 13 -> 9 and
+MIPS_GOTSYM 0xd -> 0x9, and on n32 16 -> 12, matching the known-good
+SGUG 2.23.2 and 2.20.1 links. The check_forced half has no effect on
+that signature; it is carried as SGUG's relocation-time counterpart and
+still needs guest exercise of the wider code shapes it served. Guest
+validation pending; see docs/binutils.md.
+
+
+--- a/bfd/elfxx-mips.c
++++ b/bfd/elfxx-mips.c
+@@ -4623,6 +4623,22 @@
+   return true;
+ }
+ 
++/* Return true if H is a forced-local symbol, following any indirect or
++   warning symbol chain.  */
++
++static bool
++mips_is_entry_forced_local (struct mips_elf_link_hash_entry *h)
++{
++  if (!h)
++    return false;
++
++  while (h->root.root.type == bfd_link_hash_indirect
++	 || h->root.root.type == bfd_link_hash_warning)
++    h = (struct mips_elf_link_hash_entry *) h->root.root.u.i.link;
++
++  return h->root.forced_local;
++}
++
+ /* Return true if a GOT entry for H should live in the local rather than
+    global GOT area.  */
+ 
+@@ -4645,9 +4661,10 @@
+ 
+   /* Symbols that bind locally can (and in the case of forced-local
+      symbols, must) live in the local GOT.  */
+-  if (h->got_only_for_calls
+-      ? SYMBOL_CALLS_LOCAL (info, &h->root)
+-      : SYMBOL_REFERENCES_LOCAL (info, &h->root))
++  if ((h->got_only_for_calls
++       ? SYMBOL_CALLS_LOCAL (info, &h->root)
++       : SYMBOL_REFERENCES_LOCAL (info, &h->root))
++      && mips_is_entry_forced_local (h))
+     return true;
+ 
+   /* If this is an executable that must provide a definition of the symbol,
+@@ -5216,10 +5233,12 @@
+ static bool
+ mips_elf_local_relocation_p (bfd *input_bfd,
+ 			     const Elf_Internal_Rela *relocation,
+-			     asection **local_sections)
++			     asection **local_sections,
++			     bool check_forced)
+ {
+   unsigned long r_symndx;
+   Elf_Internal_Shdr *symtab_hdr;
++  struct mips_elf_link_hash_entry *h;
+   size_t extsymoff;
+ 
+   r_symndx = ELF_R_SYM (input_bfd, relocation->r_info);
+@@ -5231,6 +5250,22 @@
+   if (elf_bad_symtab (input_bfd) && local_sections[r_symndx] != NULL)
+     return true;
+ 
++  if (check_forced)
++    {
++      /* Look up the hash table to check whether the symbol was forced
++	 local.  */
++      h = (struct mips_elf_link_hash_entry *)
++	elf_sym_hashes (input_bfd)[r_symndx - extsymoff];
++
++      /* Find the real hash-table entry for this symbol.  */
++      while (h->root.root.type == bfd_link_hash_indirect
++	     || h->root.root.type == bfd_link_hash_warning)
++	h = (struct mips_elf_link_hash_entry *) h->root.root.u.i.link;
++
++      if (h->root.forced_local)
++	return true;
++    }
++
+   return false;
+ }
+ 
+@@ -5598,7 +5633,7 @@
+      used in the array of hash table entries.  */
+   symtab_hdr = &elf_symtab_hdr (input_bfd);
+   local_p = mips_elf_local_relocation_p (input_bfd, relocation,
+-					 local_sections);
++					 local_sections, false);
+   was_local_p = local_p;
+   if (! elf_bad_symtab (input_bfd))
+     extsymoff = symtab_hdr->sh_info;
+@@ -5965,7 +6000,12 @@
+       break;
+     }
+ 
+-  local_p = (h == NULL || mips_use_local_got_p (info, h));
++  local_p = (h == NULL
++	     || ((h->got_only_for_calls
++		  ? SYMBOL_CALLS_LOCAL (info, &h->root)
++		  : SYMBOL_REFERENCES_LOCAL (info, &h->root))
++		 && mips_elf_local_relocation_p (input_bfd, relocation,
++						 local_sections, true)));
+ 
+   gp0 = _bfd_get_gp_value (input_bfd);
+   gp = _bfd_get_gp_value (abfd);
+@@ -10421,7 +10461,8 @@
+   Elf_Internal_Sym *sym;
+   asection *sec;
+ 
+-  if (mips_elf_local_relocation_p (input_bfd, rel, local_sections))
++  if (mips_elf_local_relocation_p (input_bfd, rel, local_sections,
++				   false))
+     {
+       r_type = ELF_R_TYPE (output_bfd, rel->r_info);
+       if (gprel16_reloc_p (r_type)
+@@ -10536,7 +10577,8 @@
+ 
+       r_symndx = ELF_R_SYM (input_bfd, rel->r_info);
+       symtab_hdr = &elf_symtab_hdr (input_bfd);
+-      if (mips_elf_local_relocation_p (input_bfd, rel, local_sections))
++      if (mips_elf_local_relocation_p (input_bfd, rel, local_sections,
++				   false))
+ 	{
+ 	  sec = local_sections[r_symndx];
+ 	  h = NULL;
+@@ -10599,7 +10641,7 @@
+ 	      if (hi16_reloc_p (r_type)
+ 		  || (got16_reloc_p (r_type)
+ 		      && mips_elf_local_relocation_p (input_bfd, rel,
+-						      local_sections))
++						      local_sections, false))
+ 		  || tls_hi16_reloc_p (r_type))
+ 		{
+ 		  if (!mips_elf_add_lo16_rel_addend (input_bfd, input_section,

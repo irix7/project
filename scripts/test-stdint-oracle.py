@@ -42,7 +42,7 @@ EXPECTED = "\n".join(
         "sizeof(uintmax_t)=8",
         "sizeof(void*)=4",
         "INT32_MAX=2147483647",
-        "UINT64_MAX=00000000ffffffff",
+        "UINT64_MAX=ffffffffffffffff",
         "SIZE_MAX=4294967295",
     ]
 ) + "\n"

@@ -108,16 +108,113 @@ class SourceErrataTest(unittest.TestCase):
         with self.assertRaises(CompatError):
             retarget_knr_definition("int other(void);\n", "mq_open", "__impl")
 
-    def test_unterminated_statement_gets_a_semicolon(self):
-        text = "(void)frob(x)\nnext();\n"
+
+class UnterminatedStatementTest(unittest.TestCase):
+    """The upload's missing semicolon is found by syntax alone (ADR-0001).
+
+    The matcher takes only the source text; it never carries the tree's
+    statement. It repairs a single unambiguous call statement inside a block
+    that is followed by a complete statement or the closing brace, and
+    refuses to guess when no candidate or several candidates exist.
+    """
+
+    def test_call_before_a_closing_brace_gains_exactly_one_semicolon(self):
+        text = "void emit(int value) {\n\tnote(value)\n}\n"
         self.assertEqual(
-            fix_unterminated_statement(text, "(void)frob(x)"),
-            "(void)frob(x);\nnext();\n",
+            fix_unterminated_statement(text),
+            "void emit(int value) {\n\tnote(value);\n}\n",
         )
 
-    def test_unterminated_statement_must_match_exactly(self):
+    def test_cast_call_mid_block_gains_exactly_one_semicolon(self):
+        text = (
+            "void emit(int value) {\n"
+            "\t(void)note(value)\n"
+            "\tadvance();\n"
+            "}\n"
+        )
+        self.assertEqual(
+            fix_unterminated_statement(text),
+            "void emit(int value) {\n"
+            "\t(void)note(value);\n"
+            "\tadvance();\n"
+            "}\n",
+        )
+
+    def test_terminated_statements_are_not_candidates(self):
+        text = "void emit(int value) {\n\tnote(value);\n\tadvance();\n}\n"
         with self.assertRaises(CompatError):
-            fix_unterminated_statement("(void)frob(y)\n", "(void)frob(x)")
+            fix_unterminated_statement(text)
+
+    def test_control_flow_headers_are_not_candidates(self):
+        text = (
+            "void emit(int value) {\n"
+            "\tif (value)\n\t\tnote(value);\n"
+            "\twhile (value)\n\t\tnote(value);\n"
+            "\tswitch (value) {\n\t}\n"
+            "}\n"
+        )
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_labels_directives_and_comments_are_not_candidates(self):
+        text = (
+            "void emit(int value) {\n"
+            "again:\n"
+            "#define note(value) advance(value)\n"
+            "\t/* note(value) */\n"
+            "\tadvance();\n"
+            "}\n"
+        )
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_call_shaped_line_inside_a_comment_is_not_a_candidate(self):
+        text = (
+            "void emit(int value) {\n"
+            "\t/*\n"
+            "\tnote(value)\n"
+            "\t*/\n"
+            "\tadvance();\n"
+            "}\n"
+        )
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_function_definition_header_is_not_a_candidate(self):
+        text = "void note(int value)\n{\n\tadvance();\n}\n"
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_lone_terminator_on_the_next_line_is_not_a_candidate(self):
+        text = "void emit(int value) {\n\tnote(value)\n\t;\n}\n"
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_initialiser_call_is_not_a_candidate(self):
+        text = (
+            "void emit(void) {\n"
+            "\tint table[] = {\n"
+            "\t\tmake(1)\n"
+            "\t};\n"
+            "}\n"
+        )
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
+
+    def test_no_candidate_raises_compat_error(self):
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement("int value;\n")
+
+    def test_several_candidates_are_rejected_as_ambiguous(self):
+        text = (
+            "void emit(int value) {\n"
+            "\tnote(value)\n"
+            "\tadvance();\n"
+            "\treport(value)\n"
+            "}\n"
+        )
+        with self.assertRaises(CompatError):
+            fix_unterminated_statement(text)
 
 
 class TextSubsectionTest(unittest.TestCase):

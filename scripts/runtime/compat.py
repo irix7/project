@@ -73,6 +73,13 @@ _CHAR_IMMEDIATE = re.compile(
 _TEXT_SUBSECTION = re.compile(r"^([ \t]*)\.text[ \t]+\.(init|fini)[ \t]*$", re.M)
 _SYS_PASTE_CASUALTY = re.compile(r"\bSYS_[ \t]+xpg4_recvmsg\b")
 
+# The unterminated-statement erratum is recognised by syntax, never by the
+# tree's source text (ADR-0001): a cast-qualified or plain call expression,
+# with balanced parentheses, inside a block.
+_CAST = r"\(\s*[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s*\**\s*\)"
+_CALL_STATEMENT = re.compile(r"^(?:" + _CAST + r"\s*)*([A-Za-z_]\w*)\s*\(.*\)$")
+_CONTROL_KEYWORDS = frozenset({"if", "for", "while", "switch", "return", "sizeof"})
+
 
 def retarget_knr_definition(text: str, name: str, implementation: str) -> str:
     """Give a K&R definition a private name and alias the public one to it.
@@ -91,11 +98,114 @@ def retarget_knr_definition(text: str, name: str, implementation: str) -> str:
     )
 
 
-def fix_unterminated_statement(text: str, statement: str) -> str:
-    """Terminate a statement the source upload left without its semicolon."""
-    if statement not in text:
-        raise CompatError(f"statement not found: {statement!r}")
-    return text.replace(statement + "\n", statement + ";\n", 1)
+def _line_states(lines: list) -> list:
+    """Brace depth and block-comment state at the start of each line."""
+    states = []
+    depth = 0
+    in_comment = False
+    for line in lines:
+        states.append((depth, in_comment))
+        j = 0
+        while j < len(line):
+            if in_comment:
+                if line.startswith("*/", j):
+                    in_comment = False
+                    j += 2
+                else:
+                    j += 1
+            elif line.startswith("//", j):
+                break
+            elif line.startswith("/*", j):
+                in_comment = True
+                j += 2
+            elif line[j] in "\"'":
+                quote = line[j]
+                j += 1
+                while j < len(line) and line[j] != quote:
+                    j += 2 if line[j] == "\\" else 1
+                j += 1
+            else:
+                if line[j] == "{":
+                    depth += 1
+                elif line[j] == "}":
+                    depth -= 1
+                j += 1
+    return states
+
+
+def _parens_balanced(line: str) -> bool:
+    """True when the line's parentheses nest and close, ignoring literals."""
+    depth = 0
+    j = 0
+    while j < len(line):
+        if line.startswith("//", j):
+            break
+        if line.startswith("/*", j):
+            end = line.find("*/", j + 2)
+            j = len(line) if end < 0 else end + 2
+        elif line[j] in "\"'":
+            quote = line[j]
+            j += 1
+            while j < len(line) and line[j] != quote:
+                j += 2 if line[j] == "\\" else 1
+            j += 1
+        elif line[j] == "(":
+            depth += 1
+            j += 1
+        elif line[j] == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+            j += 1
+        else:
+            j += 1
+    return depth == 0
+
+
+def fix_unterminated_statement(text: str) -> str:
+    """Append the semicolon a source upload left off a call statement.
+
+    The candidate is found syntactically: a call-expression line inside a
+    block, without its terminating semicolon, followed by a complete statement
+    or a bare closing brace. Exactly one candidate must exist; none, or
+    several, raises CompatError rather than guessing. The tree's statement
+    text never enters the repository (ADR-0001).
+    """
+    lines = text.split("\n")
+    states = _line_states(lines)
+    significant = [i for i, line in enumerate(lines) if line.strip()]
+    following = dict(zip(significant, significant[1:]))
+    candidates = []
+    for i, line in enumerate(lines):
+        depth, in_comment = states[i]
+        if depth <= 0 or in_comment:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.endswith(";"):
+            continue
+        if stripped[:2] in ("//", "/*") or stripped.startswith("*"):
+            continue
+        match = _CALL_STATEMENT.match(stripped)
+        if not match or match.group(1) in _CONTROL_KEYWORDS:
+            continue
+        if not _parens_balanced(stripped):
+            continue
+        after = lines[following[i]].strip() if i in following else ""
+        if after == "}" or (
+            after != ";" and after.endswith(";") and not after.startswith("}")
+        ):
+            candidates.append(i)
+    if not candidates:
+        raise CompatError("no unterminated statement candidate found")
+    if len(candidates) > 1:
+        raise CompatError(
+            f"{len(candidates)} unterminated statement candidates; refusing to guess"
+        )
+    index = candidates[0]
+    line = lines[index]
+    body = line.rstrip()
+    lines[index] = body + ";" + line[len(body):]
+    return "\n".join(lines)
 
 
 def rewrite_c_source(text: str) -> str:

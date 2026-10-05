@@ -124,8 +124,12 @@ build's copy, not worked around silently:
   variadic; GCC rejects an identifier-list definition against a `...`
   prototype. The build renames the definition to `__mq_open_impl` and emits
   `.globl _mq_open; .set _mq_open, __mq_open_impl`, preserving the symbol.
-- `locale/sgi_ffmtmsg.c` omits the semicolon after
-  `(void)_sgi_dofmt(...)`; the build inserts it.
+- `locale/sgi_ffmtmsg.c` leaves a call statement without its terminating
+  semicolon; the build's syntax-based repair appends it. The matcher carries
+  no source text (ADR-0001).
+
+The publication inventory behind these repairs and the current-tree
+attestation are recorded in `docs/publication.md`.
 
 Two generated message headers are absent from the upload and the dev
 install: `scripts/runtime/include/msgs/uxsgicore.h` and `msgs/uxlibc.h`

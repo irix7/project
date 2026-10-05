@@ -84,14 +84,14 @@ def o32_quad_excludes(variables: dict) -> dict:
     return excludes
 
 # Source-upload errata: defects in the release's copy that stop any compiler,
-# not MIPSpro/GCC divergences. Each is translated in the build's copy.
+# not MIPSpro/GCC divergences. Each is translated in the build's copy. The
+# unterminated-statement repair recognises the construct by syntax alone, so
+# no tree source text is carried in the repository (ADR-0001).
 ERRATA = {
     "sys/mq_open.c": lambda text: compat.retarget_knr_definition(
         text, "mq_open", "__mq_open_impl"
     ),
-    "locale/sgi_ffmtmsg.c": lambda text: compat.fix_unterminated_statement(
-        text, "(void)_sgi_dofmt(lmsgbuf, class, label, sev, fmt, ap)"
-    ),
+    "locale/sgi_ffmtmsg.c": compat.fix_unterminated_statement,
 }
 
 # The generated sources and where the generator writes them.

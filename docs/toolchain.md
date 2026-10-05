@@ -1,10 +1,13 @@
 # The IRIX toolchain and its patch series
 
 `scripts/build-toolchain.sh` builds the project's `mips-sgi-irix6.5` cross:
-binutils 2.20.1 from the pdaxrom lineage plus an in-repo GCC IRIX layer,
-carried as a patch series against the upstream release (CONTEXT.md's *patch
-series*). The default target is GCC 16.2.0, the project's chosen compiler
-(ADR-0002); `--gcc` selects the 15.3.0 or 15.2.0 fallback recipe.
+vanilla GNU binutils 2.47 plus an in-repo GCC IRIX layer, carried as a
+patch series against the upstream release (CONTEXT.md's *patch series*).
+Binutils 2.47 needs no target restoration or fix patches (see
+[binutils.md](binutils.md)); `--binutils 2.20.1` still selects the
+pdaxrom-patched seed fallback. The default target is GCC 16.2.0, the
+project's chosen compiler (ADR-0002); `--gcc` selects the 15.3.0 or 15.2.0
+fallback recipe.
 
 The series is the source of truth, not a long-lived fork branch. Every patch
 keeps GCC's GPL; no SGI or licence-restricted material is published
@@ -22,11 +25,14 @@ scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--gcc-version 16.2.0
 ```
 
-That builds binutils 2.20.1 and GCC 16.2.0 into
+That builds binutils 2.47 and GCC 16.2.0 into
 `.scratch/toolchain-16.2.0/prefix`, configured against the captured 6.5.7m
 sysroot with big-endian o32, n32 and n64 multilibs and o32 as the default
-ABI (ADR-0003). The default work directory is version-separated:
-`<work root>/toolchain-<gcc version>`, where the work root is
+ABI (ADR-0003). `--binutils 2.20.1` selects the pdaxrom-patched fallback
+for the binutils half of the prefix; the selector and the vanilla-first
+evidence are in [binutils.md](binutils.md). The default work directory is
+version-separated: `<work root>/toolchain-<gcc version>`, where the work
+root is
 `IRIX_WORK_ROOT` when set and `<repo>/.scratch` otherwise. The flake's
 `nix run` exports `IRIX_WORK_ROOT="$PWD/.scratch"`, so it follows the
 caller's tree and `nix run . -- --gcc 15.3.0` lands in
@@ -102,9 +108,14 @@ sha512 list
 | `gcc-16.2.0.tar.xz` | `e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e` |
 | `gcc-15.3.0.tar.xz` | `fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb` |
 | `gcc-15.2.0.tar.xz` | `438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e` |
+| `binutils-2.47.tar.xz` | `154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff` |
+| `binutils-2.20.1.tar.bz2` | `71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64` |
 
-Binutils stays 2.20.1 with the two pdaxrom patches; GCC 16.2 did not force
-a change there.
+The binutils pins are checked against the official sha512 list at
+`https://sourceware.org/pub/binutils/releases/sha512.sum`; 2.47 is vanilla
+(no patches) and 2.20.1 keeps its two pdaxrom patches unchanged. See
+[binutils.md](binutils.md) for the onre comparison and the no-patch
+decision.
 
 The work directory defaults to `<work root>/toolchain-<gcc version>` so a
 default build can never overwrite another version's tree, in particular the
@@ -118,8 +129,9 @@ both.
 Resume state is bound to the bytes that produced it (issue #26). A build
 is reused only when the script can prove all of the following still match:
 
-- the component and GCC version, the pinned tarball sha256 and the recipe
-  (`series`, `pdaxrom`);
+- the component (binutils or GCC), its version, the pinned tarball sha256
+  and the recipe (`vanilla`, `series`, `pdaxrom`), plus the binutils
+  selector's patch digests when the pdaxrom recipe is selected;
 - the sha256 of every patch in apply order (in-repo patches hashed from
   their bytes, remote patches from their pinned checksums, so identity is
   knowable without a download);
@@ -305,6 +317,18 @@ The guest-free harness logic keeps its unit tests:
 ```sh
 python3 scripts/smoke/test-smoke.py
 python3 scripts/lib/test-build-identity.py   # resumption identity, fake tools only
+```
+
+The binutils vanilla-first evidence (issue #21) has a guest-free
+regression that drives a candidate binutils prefix through the existing
+cross with a generated specs file, then checks o32/n32 emission, the IRIX
+startfiles and the dynamic link. It skips cleanly without the prefixes and
+runs against 2.20.1 with `--binutils-version 2.20.1` too; see
+[binutils.md](binutils.md):
+
+```sh
+scripts/test-binutils-vanilla.sh --gcc-prefix .scratch/toolchain-16.2.0/prefix \
+	--binutils-prefix <binutils-2.47-prefix>
 ```
 
 The common-symbol alignment contract (issue #28) has a guest-free

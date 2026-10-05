@@ -589,6 +589,8 @@ class BuildToolchainEndToEndTest(TempDirTest):
         BINUTILS_VERSION=2.20.1
         BINUTILS_TARBALL="binutils-2.20.1.tar.bz2"
         BINUTILS_SHA256=deadbeef
+        BINUTILS_RECIPE=pdaxrom
+        BINUTILS_PATCHES=()
         IRIX_SYSROOT=
         TARGET=mips-sgi-irix6.5
         PREFIX="$2"
@@ -615,6 +617,155 @@ class BuildToolchainEndToEndTest(TempDirTest):
         build_binutils
         """
     )
+
+    BINUTILS_IDENTITY_DRIVER = textwrap.dedent(
+        """\
+        set -euo pipefail
+        source "$1"
+        TARGET=mips-sgi-irix6.5
+        digest() { binutils_identity "$@" | irix_identity_digest; }
+        BINUTILS_VERSION=2.47
+        BINUTILS_SHA256=154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
+        BINUTILS_RECIPE=vanilla
+        BINUTILS_PATCHES=()
+        vanilla=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        vanilla_again=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        BINUTILS_VERSION=2.20.1
+        BINUTILS_SHA256=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64
+        BINUTILS_RECIPE=pdaxrom
+        BINUTILS_PATCHES=(
+          "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
+          "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
+        )
+        pdaxrom=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        BINUTILS_PATCHES[0]="binutils-2.20.1-irix.diff:deadbeef"
+        chunked=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        BINUTILS_PATCHES=(
+          "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
+          "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
+        )
+        configure=$(digest --prefix=/q --target=mips-sgi-irix6.5)
+        printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \
+          "$vanilla" "$vanilla_again" "$pdaxrom" "$chunked" "$configure"
+        """
+    )
+
+    def test_binutils_identity_tracks_version_recipe_patches_and_options(self):
+        result = run_bash(self.BINUTILS_IDENTITY_DRIVER, BUILD_TOOLCHAIN)
+        vanilla, vanilla_again, pdaxrom, chunked, configure = result.stdout.split()
+        self.assertEqual(vanilla, vanilla_again)
+        self.assertEqual(
+            len({vanilla, pdaxrom, chunked, configure}), 4
+        )
+
+    RECIPE_DRIVER = textwrap.dedent(
+        """\
+        set -euo pipefail
+        source "$1"
+        BINUTILS_VERSION=2.47
+        resolve_binutils_recipe
+        echo "2.47 ${BINUTILS_RECIPE} ${BINUTILS_TARBALL} ${#BINUTILS_PATCHES[@]} ${BINUTILS_SHA256}"
+        BINUTILS_VERSION=2.20.1
+        resolve_binutils_recipe
+        echo "2.20.1 ${BINUTILS_RECIPE} ${BINUTILS_TARBALL} ${#BINUTILS_PATCHES[@]} ${BINUTILS_SHA256}"
+        BINUTILS_VERSION=2.99
+        if (resolve_binutils_recipe) 2>/dev/null; then echo "2.99 accepted"; else echo "2.99 refused"; fi
+        """
+    )
+
+    def test_binutils_recipe_resolver_pins_both_releases(self):
+        result = run_bash(self.RECIPE_DRIVER, BUILD_TOOLCHAIN)
+        lines = result.stdout.splitlines()
+        self.assertEqual(
+            lines[0],
+            "2.47 vanilla binutils-2.47.tar.xz 0 "
+            "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff",
+        )
+        self.assertEqual(
+            lines[1],
+            "2.20.1 pdaxrom binutils-2.20.1.tar.bz2 2 "
+            "71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64",
+        )
+        self.assertEqual(lines[2], "2.99 refused")
+
+    VANILLA_BINUTILS_DRIVER = textwrap.dedent(
+        """\
+        set -euo pipefail
+        source "$1"
+        BINUTILS_VERSION=2.47
+        BINUTILS_TARBALL="binutils-2.47.tar.xz"
+        BINUTILS_SHA256=deadbeef
+        BINUTILS_RECIPE=vanilla
+        BINUTILS_PATCHES=()
+        IRIX_SYSROOT=
+        TARGET=mips-sgi-irix6.5
+        PREFIX="$2"
+        STAMPS="$3"
+        LOGS="$4"
+        BUILD_DIR="$5"
+        DOWNLOADS="$6"
+        SRC_DIR="$7"
+        FAKEBIN="$8"
+        JOBS=1
+        export PREFIX TARGET
+        mkdir -p "$PREFIX/bin" "$STAMPS" "$LOGS" "$BUILD_DIR" "$DOWNLOADS" "$SRC_DIR/binutils-2.47"
+        cat > "$SRC_DIR/binutils-2.47/configure" <<'EOS'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        : > config.status
+        EOS
+        chmod +x "$SRC_DIR/binutils-2.47/configure"
+        export PATH="$FAKEBIN:$PATH"
+        fetch() { :; }
+        fetch_patches() { echo "fetch_patches called" >> "$FAKE_LOG"; }
+        irix_apply_patches() { echo "irix_apply_patches called" >> "$FAKE_LOG"; }
+        build_binutils
+        build_binutils
+        """
+    )
+
+    def test_vanilla_binutils_build_fetches_no_patches_and_stamps_the_recipe(self):
+        self.work.mkdir(exist_ok=True)
+        write_exe(
+            self.fakebin / "make",
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env bash
+                set -euo pipefail
+                if [ "${1:-}" = install ]; then
+                    cat > "$PREFIX/bin/mips-sgi-irix6.5-as" <<'EOS'
+                #!/usr/bin/env bash
+                echo "GNU assembler (GNU Binutils) 2.47"
+                EOS
+                    cat > "$PREFIX/bin/mips-sgi-irix6.5-ld" <<'EOS'
+                #!/usr/bin/env bash
+                echo "GNU ld (GNU Binutils) 2.47"
+                EOS
+                    chmod +x "$PREFIX/bin/mips-sgi-irix6.5-as" "$PREFIX/bin/mips-sgi-irix6.5-ld"
+                fi
+                """
+            ),
+        )
+        env = dict(self.env)
+        env["FAKE_LOG"] = str(self.tmp / "vanilla.log")
+        result = run_bash(
+            self.VANILLA_BINUTILS_DRIVER,
+            BUILD_TOOLCHAIN,
+            self.work / "prefix",
+            self.work / "stamps",
+            self.work / "logs",
+            self.work / "build",
+            self.work / "downloads",
+            self.work / "src",
+            self.fakebin,
+            env=env,
+        )
+        self.assertEqual(result.stdout.count("binutils 2.47 already installed"), 1)
+        self.assertFalse((self.tmp / "vanilla.log").exists())
+        identity = (self.work / "stamps" / "binutils.installed.identity").read_text()
+        self.assertIn("version=2.47", identity)
+        self.assertIn("recipe=vanilla", identity)
+        self.assertIn("patches:\nconfigure:", identity)
 
     def test_binutils_completion_record_captures_the_installed_outputs(self):
         self.work.mkdir(exist_ok=True)
@@ -738,6 +889,26 @@ class ScriptInvocationTest(TempDirTest):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("another GCC release", result.stderr)
         self.assertTrue(self.curl_log.exists(), "fetch was never attempted")
+
+    def test_binutils_selector_defaults_to_vanilla_247(self):
+        work = self.tmp / "work"
+        result = self._run("--gcc", "15.3.0", "--work-dir", work)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("binutils: 2.47 (vanilla recipe)", result.stdout)
+
+    def test_binutils_selector_accepts_the_fallback_recipe(self):
+        work = self.tmp / "work"
+        result = self._run(
+            "--binutils", "2.20.1", "--gcc", "15.3.0", "--work-dir", work
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("binutils: 2.20.1 (pdaxrom recipe)", result.stdout)
+
+    def test_binutils_selector_refuses_unknown_versions_before_fetching(self):
+        refused = self._run("--binutils", "2.99", "--work-dir", self.tmp / "other")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("unsupported binutils version: 2.99", refused.stderr)
+        self.assertFalse(self.curl_log.exists(), "fetch ran before the version check")
 
     def test_prefix_holding_another_release_is_refused(self):
         prefix = self.tmp / "prefix"

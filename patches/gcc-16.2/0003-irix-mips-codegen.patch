@@ -3,10 +3,20 @@ IRIX MIPS codegen and bootstrap adjustments
 mips.cc: make IRIX's va_list a plain char *, do not emit the .mdebug.abi
 section that the native ld warns about, emit the o32 .globl name .text
 directive for undefined functions so the linker cannot skip necessary
-$gp setup, keep common objects non-local for the native ld, guard
-ASM_OUTPUT_TYPE_DIRECTIVE, and mark o32 functions written so
-mips_file_end does not treat them as external. The R4000 fp_add cost
-change is the pdaxrom tuning tweak.
+$gp setup, guard ASM_OUTPUT_TYPE_DIRECTIVE, and mark o32 functions
+written so mips_file_end does not treat them as external. The R4000
+fp_add cost change is the pdaxrom tuning tweak.
+
+The pdaxrom layer also changed the final argument of
+mips_declare_common_object() from true to false. In GCC 16.2 that
+argument is takes_alignment_p: true emits `.comm name,size,align`,
+false emits `.comm name,size` and only rounds the size. It does not
+control symbol locality. Upstream passes true, and the IRIX toolchain
+builds with GNU as (`--with-gnu-as` in scripts/build-toolchain.sh),
+which accepts the three-operand directive, so the hunk is dropped and
+the upstream call kept. No target-wide common-alignment suppression is
+carried, and scripts/test-common-align.sh checks the contract for o32
+and n32 under -fcommon and -fno-common.
 
 dwarf2cfi.cc: save the return-address register into
 DWARF_FRAME_RETURN_COLUMN when the IRIX layout moves it, which the
@@ -14,7 +24,8 @@ IRIX 6 host bootstrap needs. varasm.cc relaxes two assertions that IRIX
 assembly paths trip.
 
 Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
-All hunks applied to 16.2 with offsets only; no re-derivation was needed.
+Every carried hunk applied to 16.2 with offsets only; no re-derivation
+was needed. The common-object hunk is dropped deliberately (issue #28).
 
 diff --git a/gcc/config/mips/mips.cc b/gcc/config/mips/mips.cc
 index cc45a195b..5fd43295d 100644
@@ -68,16 +79,7 @@ index cc45a195b..5fd43295d 100644
 +	}
      }
  }
- 
-@@ -10191,7 +10209,7 @@ mips_output_aligned_decl_common (FILE *stream, tree decl, const char *name,
-     }
-   else
-     mips_declare_common_object (stream, name, "\n\t.comm\t",
--				size, align, true);
-+				size, align, false);
- }
- 
- #ifdef ASM_OUTPUT_SIZE_DIRECTIVE
+
 @@ -10313,6 +10331,11 @@ mips_file_start (void)
  {
    default_file_start ();

@@ -203,6 +203,23 @@ python3 scripts/smoke/test-smoke.py
 python3 scripts/lib/test-build-identity.py   # resumption identity, fake tools only
 ```
 
+The common-symbol alignment contract (issue #28) has a guest-free
+regression too:
+
+```sh
+scripts/test-common-align.sh --prefix .scratch/toolchain-16.2/prefix
+```
+
+It compiles synthetic ordinary and 64-byte-aligned tentative definitions
+for o32 and n32 under `-fcommon` and `-fno-common`, then checks that the
+object records the requested alignment (a three-operand
+`.comm name,size,align`, or an aligned `.bss`), that the final linked
+address is a multiple of it, and that the compiler's optimised
+assumption agrees. The series keeps upstream's `true` for
+`mips_declare_common_object`'s alignment-operand switch — the toolchain
+assembles with GNU as (`--with-gnu-as`), which accepts the three-operand
+directive — so common alignment is not weakened for any MIPS target.
+
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify
 output, smoke logs and readelf proof) lives under
 `.scratch/gcc-16.2-evidence/`; nothing captured from the guest is committed

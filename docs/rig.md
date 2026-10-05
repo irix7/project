@@ -24,6 +24,7 @@ ticket's.
 | `logs/driver.log`       | the bring-up driver's transcript and its own decisions |
 | `logs/evidence.txt`     | `uname -a` and `hinv` captured over `iris-ci run` |
 | `state/`                | per-phase done markers, so provisioning resumes rather than repeats |
+| `state/build-iris.receipt` | the emulator build's inputs and outputs (repo, commits, features, Rust identity, binary paths) |
 
 ## Prerequisites
 
@@ -32,6 +33,34 @@ ticket's.
 - GNU nix with the flake's `rig` devshell for the host C toolchain and
   libraries; `nix develop .#rig --command bash` is the intended shell.
 - Rust: `build-iris.sh` provisions a rig-local nightly via rustup on first use.
+
+## The emulator build receipt
+
+`build-iris.sh` records a receipt at `state/build-iris.receipt` naming the
+upstream repo, the requested and resolved commits, the `lightning` feature
+and the rig-local `rustc -V`/`cargo -V` identity, together with the produced
+binary paths. The binary is reused only while every one of those still
+matches and both binaries are executable; a changed pin, feature or nightly
+rebuilds. The receipt is written after a successful build, so a failed or
+partial build never counts as current.
+
+A dirty checkout is refused before any forced checkout (`git status
+--porcelain`), so local emulator changes are never discarded implicitly.
+`--force` means rebuild; discarding changes needs an explicit
+`--force-checkout`:
+
+```sh
+scripts/rig/build-iris.sh                   # reuse a receipted build
+scripts/rig/build-iris.sh --force           # rebuild, keep local changes
+scripts/rig/build-iris.sh --force --force-checkout  # discard, then rebuild
+```
+
+The receipt logic keeps its host-only test (a fake local git origin, fake
+nix and a fake rig-local Rust toolchain; nothing is fetched or compiled):
+
+```sh
+python3 scripts/rig/test-build-iris.py
+```
 
 ## Bring-up
 
@@ -67,6 +96,7 @@ follows in issue #5.
 The MIPSpro oracle install, reference build and sysroot capture build on them;
 see `docs/oracle.md`.
 
+<<<<<<< HEAD
 ## Socket identity
 
 Every script and driver that speaks to the guest addresses the selected

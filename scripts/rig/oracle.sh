@@ -272,15 +272,26 @@ while [ $# -gt 0 ]; do
 done
 
 case "$cmd" in
-	install) cmd_install "$force" ;;
-	patch) cmd_patch ;;
-	capture) cmd_capture ;;
-	all)
-		cmd_install "$force"
-		cmd_patch
-		cmd_capture
-		;;
-	status) cmd_status ;;
-	""|-h|--help) usage ;;
+	install|patch|capture|all|status) ;;
+	""|-h|--help) usage; exit 0 ;;
 	*) usage >&2; rig_die "unknown command: $cmd" ;;
 esac
+
+oracle_main() {
+	case "$cmd" in
+		install) cmd_install "$force" ;;
+		patch) cmd_patch ;;
+		capture) cmd_capture ;;
+		all)
+			cmd_install "$force"
+			cmd_patch
+			cmd_capture
+			;;
+		status) cmd_status ;;
+	esac
+}
+
+# Oracle work is one lifecycle transaction under the shared guest lock, like
+# provision: its ensure-running start-rig call re-enters the lock rather than
+# deadlocking, and no smoke or stop can interleave with an install or capture.
+rig_with_guest_lock oracle_main

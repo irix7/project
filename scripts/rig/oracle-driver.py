@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -88,7 +87,10 @@ def ensure_shell(rig: Rig, ic: str) -> None:
     The rig starts paused, so `start` first. Then the guest is either already
     at a shell (`# `), at a login prompt (log in over iris-ci), or at the PROM
     maintenance menu (boot it). Waiting happens on serial because `iris-ci run`
-    would blind-fire a command at a login prompt as a username.
+    would blind-fire a command at a login prompt as a username. Every iris-ci
+    call goes through Rig.run_ic, which pins the selected socket in both argv
+    and the environment; the CLI would otherwise fall back to $IRIS_SOCKET or
+    the sibling's default /tmp/iris.sock.
     """
     rig.rpc("start")
     # A bare newline redraws whatever prompt the guest is sitting at, so the
@@ -101,11 +103,11 @@ def ensure_shell(rig: Rig, ic: str) -> None:
     if pattern == "# ":
         return
     if pattern in ("console login:", "login:"):
-        subprocess.run([ic, "login"], check=True)
+        rig.run_ic(ic, "login")
         return
     # PROM: let iris-ci boot through to the login prompt, then log in.
-    subprocess.run([ic, "boot"], check=True)
-    subprocess.run([ic, "login"], check=True)
+    rig.run_ic(ic, "boot")
+    rig.run_ic(ic, "login")
 
 
 def run_inst(rig: Rig, products: str) -> None:

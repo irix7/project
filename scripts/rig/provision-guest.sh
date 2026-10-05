@@ -41,15 +41,6 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-if [ -n "$fresh" ]; then
-	rig_log "--fresh: removing state markers and disk $RIG_DISK"
-	rm -rf "$RIG_STATE_DIR"
-	rm -f "$RIG_DISK" "$RIG_NVRAM"
-fi
-
-"$RIG_REPO_ROOT/scripts/rig/build-iris.sh"
-"$RIG_REPO_ROOT/scripts/rig/new-rig.sh"
-
 rig_run_driver() {
 	IRIS_SOCKET="$RIG_SOCKET" \
 		RIG_DRIVER_LOG="$RIG_DRIVER_LOG" \
@@ -59,24 +50,37 @@ rig_run_driver() {
 		python3 "$RIG_REPO_ROOT/scripts/rig/install-driver.py" "$@"
 }
 
-if [ ! -f "$RIG_STATE_DIR/phase-a.done" ]; then
-	rig_log "phase A: seeding NVRAM (headless)"
-	"$RIG_REPO_ROOT/scripts/rig/stop-rig.sh" >/dev/null 2>&1 || true
-	"$RIG_REPO_ROOT/scripts/rig/start-rig.sh" --headless
-	rig_run_driver phase-a
-	"$RIG_REPO_ROOT/scripts/rig/stop-rig.sh"
-fi
+provision_guest() {
+	if [ -n "$fresh" ]; then
+		rig_fresh_reset
+	fi
 
-# The post-install restart reboots inside the same iris process, so labelling,
-# the install and verification share one long-running session.
-if [ ! -f "$RIG_STATE_DIR/verify.done" ]; then
-	rig_running || "$RIG_REPO_ROOT/scripts/rig/start-rig.sh"
-	[ -f "$RIG_STATE_DIR/label.done" ] || rig_run_driver label
-	[ -f "$RIG_STATE_DIR/install.done" ] || rig_run_driver install
-	[ -f "$RIG_STATE_DIR/verify.done" ] || rig_run_driver verify
-fi
+	"$RIG_REPO_ROOT/scripts/rig/build-iris.sh"
+	"$RIG_REPO_ROOT/scripts/rig/new-rig.sh"
 
-rig_log "provisioning complete"
-rig_log "serial log:  $RIG_SERIAL_LOG"
-rig_log "driver log:  $RIG_DRIVER_LOG"
-rig_log "evidence:    $RIG_LOG_DIR/evidence.txt"
+	if [ ! -f "$RIG_STATE_DIR/phase-a.done" ]; then
+		rig_log "phase A: seeding NVRAM (headless)"
+		"$RIG_REPO_ROOT/scripts/rig/stop-rig.sh" >/dev/null 2>&1 || true
+		"$RIG_REPO_ROOT/scripts/rig/start-rig.sh" --headless
+		rig_run_driver phase-a
+		"$RIG_REPO_ROOT/scripts/rig/stop-rig.sh"
+	fi
+
+	# The post-install restart reboots inside the same iris process, so labelling,
+	# the install and verification share one long-running session.
+	if [ ! -f "$RIG_STATE_DIR/verify.done" ]; then
+		rig_running || "$RIG_REPO_ROOT/scripts/rig/start-rig.sh"
+		[ -f "$RIG_STATE_DIR/label.done" ] || rig_run_driver label
+		[ -f "$RIG_STATE_DIR/install.done" ] || rig_run_driver install
+		[ -f "$RIG_STATE_DIR/verify.done" ] || rig_run_driver verify
+	fi
+
+	rig_log "provisioning complete"
+	rig_log "serial log:  $RIG_SERIAL_LOG"
+	rig_log "driver log:  $RIG_DRIVER_LOG"
+	rig_log "evidence:    $RIG_LOG_DIR/evidence.txt"
+}
+
+# The whole provision run is one lifecycle transaction; its internal
+# start-rig/stop-rig calls re-enter through RIG_GUEST_LOCK_HELD.
+rig_with_guest_lock provision_guest

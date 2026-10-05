@@ -91,9 +91,11 @@ EOF
 }
 
 # Take lib.sh's shared guest lock around every emulator transaction. This
-# shadows lib.sh's ic so no call in this script can bypass the lock.
+# shadows lib.sh's ic so no call in this script can bypass the lock, and pins
+# the selected socket in argv as well as the environment.
 ic() {
-	IRIS_SOCKET="$RIG_SOCKET" rig_with_guest_lock "$RIG_IRIS_CI" "$@"
+	IRIS_SOCKET="$RIG_SOCKET" rig_with_guest_lock \
+		"$RIG_IRIS_CI" --socket "$RIG_SOCKET" "$@"
 }
 
 rig_ensure_running() {

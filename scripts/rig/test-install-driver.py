@@ -8,14 +8,21 @@ requests are the exact strings observed in the 6.5.7 install transcript.
 """
 
 import importlib.util
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     "install_driver", Path(__file__).with_name("install-driver.py")
 )
 drv = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(drv)
+
+SOCKET = "/rig/iris.sock"
+IC = "/rig/iris/target/release/iris-ci"
 
 MEDIA = {
     "tools": "/rig/media/IRIX 6.5.7 Installation Tools and Overlays (1 of 2).iso",
@@ -30,6 +37,76 @@ REQUESTS = {
     "foundation2": "IRIX 6.5 FOUNDATION-2",
     "overlays2": "IRIX 6.5.7 Overlays 2-of-2 02/00",
 }
+
+
+class IcSocket(unittest.TestCase):
+    """Every iris-ci call must name the selected socket in both argv and env."""
+
+    def setUp(self):
+        self.rig = drv.Rig(SOCKET, log_path=None, echo=False)
+        self.calls = []
+
+        def fake_run(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        patcher = mock.patch.object(drv.subprocess, "run", side_effect=fake_run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_argv_carries_the_selected_socket(self):
+        self.rig.run_ic(IC, "login")
+        argv, _ = self.calls[0]
+        self.assertEqual(argv, [IC, "--socket", SOCKET, "login"])
+
+    def test_env_overrides_an_inherited_iris_socket(self):
+        with mock.patch.dict(os.environ, {"IRIS_SOCKET": "/tmp/iris.sock"}):
+            self.rig.run_ic(IC, "login")
+        _, kwargs = self.calls[0]
+        self.assertEqual(kwargs["env"]["IRIS_SOCKET"], SOCKET)
+        self.assertNotEqual(kwargs["env"]["IRIS_SOCKET"], "/tmp/iris.sock")
+
+    def test_run_ic_checks_and_keeps_caller_options(self):
+        self.rig.run_ic(IC, "run", "uname -a", capture_output=True, text=True)
+        argv, kwargs = self.calls[0]
+        self.assertEqual(argv, [IC, "--socket", SOCKET, "run", "uname -a"])
+        self.assertTrue(kwargs["check"])
+        self.assertTrue(kwargs["capture_output"])
+
+
+class VerifySocket(unittest.TestCase):
+    """The verify phase's login and run calls must pin the rig's socket."""
+
+    def test_login_and_runs_pin_the_socket(self):
+        rig = drv.Rig(SOCKET, log_path=None, echo=False)
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout="out\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = os.path.join(tmp, "evidence.txt")
+            with mock.patch.object(drv.Rig, "rpc"), \
+                 mock.patch.object(drv.Rig, "send"), \
+                 mock.patch.object(
+                     drv.Rig, "expect", return_value=("", "console login:")
+                 ), \
+                 mock.patch.object(drv.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.dict(os.environ, {"IRIS_SOCKET": "/tmp/iris.sock"}):
+                drv.verify(rig, tmp, IC, evidence)
+            self.assertTrue(os.path.exists(evidence))
+
+        self.assertTrue(
+            any("login" in argv for argv, _ in calls), "no login call was made"
+        )
+        self.assertTrue(
+            any("run" in argv for argv, _ in calls), "no run call was made"
+        )
+        for argv, kwargs in calls:
+            self.assertEqual(argv[0], IC)
+            self.assertEqual(argv[1:3], ["--socket", SOCKET])
+            self.assertEqual(kwargs["env"]["IRIS_SOCKET"], SOCKET)
 
 
 class DiscMatches(unittest.TestCase):

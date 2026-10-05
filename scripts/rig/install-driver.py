@@ -93,6 +93,31 @@ class Rig:
             self.logf.close()
             self.logf = None
 
+    def ic_command(self, ic: str, *args: str) -> list[str]:
+        """The iris-ci argv that names this rig's socket explicitly.
+
+        `--socket` is a global iris-ci option: without it the CLI falls back to
+        $IRIS_SOCKET or the default /tmp/iris.sock, which would address the
+        sibling session (ADR-0004).
+        """
+        return [ic, "--socket", self.socket_path, *args]
+
+    def ic_env(self) -> dict[str, str]:
+        """The iris-ci environment, pinned to this rig's socket.
+
+        Both carriers are set deliberately: argv survives an inherited
+        environment, and the environment covers a CLI that ignores argv order.
+        """
+        env = dict(os.environ)
+        env["IRIS_SOCKET"] = self.socket_path
+        return env
+
+    def run_ic(self, ic: str, *args: str, **kwargs):
+        """Run iris-ci with the selected socket in argv and the environment."""
+        kwargs.setdefault("check", True)
+        kwargs.setdefault("env", self.ic_env())
+        return subprocess.run(self.ic_command(ic, *args), **kwargs)
+
     def _log(self, text: str) -> None:
         if self.logf:
             self.logf.write(text)
@@ -515,10 +540,13 @@ def verify(rig: Rig, state_dir: str, ic: str, evidence: str) -> None:
             continue
         break
 
-    subprocess.run([ic, "login"], check=True)
-    subprocess.run(
-        [ic, "run", "--timeout", "120", "dvhtool -v delete ide /dev/rdsk/dks0d1vh"],
-        check=True,
+    rig.run_ic(ic, "login")
+    rig.run_ic(
+        ic,
+        "run",
+        "--timeout",
+        "120",
+        "dvhtool -v delete ide /dev/rdsk/dks0d1vh",
         capture_output=True,
         text=True,
     )
@@ -528,7 +556,7 @@ def verify(rig: Rig, state_dir: str, ic: str, evidence: str) -> None:
     # the maintenance-stream target, which uname alone does not. Pipe it
     # through cat so IRIX does not page the output on the console.
     for cmd in ("uname -a", "hinv", "versions eoe | cat"):
-        proc = subprocess.run([ic, "run", "--timeout", "120", cmd], check=True, capture_output=True, text=True)
+        proc = rig.run_ic(ic, "run", "--timeout", "120", cmd, capture_output=True, text=True)
         print(proc.stdout)
         lines.append(f"$ {cmd}\n{proc.stdout}\n")
     with open(evidence, "w") as f:

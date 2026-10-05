@@ -8,8 +8,11 @@ sysroot manifest's coverage of headers, startfiles and libc/libm per ABI.
 """
 
 import importlib.util
+import os
+import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).parent
 SPEC = importlib.util.spec_from_file_location(
@@ -17,6 +20,11 @@ SPEC = importlib.util.spec_from_file_location(
 )
 drv = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(drv)
+
+install_driver = drv.install_driver
+
+SOCKET = "/rig/iris.sock"
+IC = "/rig/iris/target/release/iris-ci"
 
 SUCCESS_TAIL = """
 Checking dependencies ..  99% 100% Done.
@@ -71,6 +79,63 @@ class OracleSets(unittest.TestCase):
         slug, media, products = drv.ORACLE_SETS[2]
         self.assertEqual(media, "Compiler Execution Environment 7.4.iso")
         self.assertIn("compiler_eoe", products)
+
+
+class EnsureShellSocket(unittest.TestCase):
+    """Every ensure_shell path must pin the selected socket on iris-ci calls."""
+
+    def setUp(self):
+        self.rig = drv.Rig(SOCKET, log_path=None, echo=False)
+        self.calls = []
+
+        def fake_run(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0)
+
+        self.run_patcher = mock.patch.object(
+            install_driver.subprocess, "run", side_effect=fake_run
+        )
+        self.run_patcher.start()
+        self.addCleanup(self.run_patcher.stop)
+
+        env_patcher = mock.patch.dict(
+            os.environ, {"IRIS_SOCKET": "/tmp/iris.sock"}
+        )
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+    def drive(self, pattern):
+        with mock.patch.object(drv.Rig, "rpc"), \
+             mock.patch.object(drv.Rig, "send"), \
+             mock.patch.object(drv.Rig, "expect", return_value=("", pattern)):
+            drv.ensure_shell(self.rig, IC)
+
+    def assert_pinned(self):
+        self.assertTrue(self.calls, "expected at least one iris-ci call")
+        for argv, kwargs in self.calls:
+            self.assertEqual(argv[0], IC)
+            self.assertEqual(argv[1:3], ["--socket", SOCKET])
+            self.assertEqual(kwargs["env"]["IRIS_SOCKET"], SOCKET)
+
+    def test_already_at_shell_runs_no_command(self):
+        self.drive("# ")
+        self.assertEqual(self.calls, [])
+
+    def test_login_prompt_pins_the_socket(self):
+        self.drive("login:")
+        self.assertEqual([argv[-1] for argv, _ in self.calls], ["login"])
+        self.assert_pinned()
+
+    def test_console_login_prompt_pins_the_socket(self):
+        self.drive("console login:")
+        self.assert_pinned()
+
+    def test_prom_boots_then_logs_in_with_the_socket(self):
+        self.drive("Option?")
+        self.assertEqual(
+            [argv[-1] for argv, _ in self.calls], ["boot", "login"]
+        )
+        self.assert_pinned()
 
 
 class SysrootManifest(unittest.TestCase):

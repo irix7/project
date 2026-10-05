@@ -263,6 +263,23 @@ class PatchedHeader(unittest.TestCase):
         self.assertIn("gthread-selection: PASS", run.stdout)
 
 
+def defined_symbols(library):
+    """The dynamic definition symbols of an IRIX library, version stripped."""
+    proc = subprocess.run(
+        [str(NM), "-D", "--defined-only", str(library)],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"nm failed on {library}:\n{proc.stderr}")
+    symbols = set()
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if parts:
+            symbols.add(parts[-1].split("@")[0])
+    return symbols
+
+
 class CaptureCompile(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -273,6 +290,27 @@ class CaptureCompile(unittest.TestCase):
             self.skipTest(f"cross compiler not found: {CROSS}")
         if not SYSROOT.is_dir():
             self.skipTest(f"capture sysroot not found: {SYSROOT}")
+
+    def test_capture_libc_exports_sched_yield(self):
+        self.require_cross()
+        libraries = [
+            SYSROOT / "usr/lib/libc.so.1",
+            SYSROOT / "usr/lib32/libc.so.1",
+        ]
+        present = [library for library in libraries if library.exists()]
+        if not present:
+            self.skipTest("capture has no libc.so.1; the capture is incomplete")
+        self.assertEqual(
+            len(present),
+            len(libraries),
+            "the capture ships only one of the two libc.so.1 runtime libraries",
+        )
+        for library in present:
+            self.assertIn(
+                "sched_yield",
+                defined_symbols(library),
+                f"{library} does not export sched_yield",
+            )
 
     def test_patched_header_compiles_against_capture(self):
         self.require_cross()
@@ -332,17 +370,7 @@ class CaptureCompile(unittest.TestCase):
             "the capture ships only one of the two libpthread.so link libraries",
         )
         for library in present:
-            proc = subprocess.run(
-                [str(NM), "-D", "--defined-only", str(library)],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            defined = set()
-            for line in proc.stdout.splitlines():
-                parts = line.split()
-                if parts:
-                    defined.add(parts[-1].split("@")[0])
+            defined = defined_symbols(library)
             missing = sorted(symbol for symbol in required if symbol not in defined)
             self.assertEqual(missing, [], f"{library} is missing: {missing}")
 

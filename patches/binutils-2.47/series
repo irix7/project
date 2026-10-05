@@ -9,7 +9,8 @@
 #
 # Apply with `patch -p1` from the binutils-2.47 source root, in order.
 # Provenance: SGUG-RSE binutils2_23.sgifixes.patch, onre/binutils-gdb
-# binutils-2_44-irix (4b55be5884a3) and upstream commits 9e8082845f85 and
-# 3be08ea4728b.
+# binutils-2_44-irix (4b55be5884a3) and upstream commits 9e8082845f85,
+# e6aea42dfa and 3be08ea4728b.
 0001-irix-got-local-restoration.patch
 0002-irix-gp-global-absolute.patch
+0003-irix-rld-map-section.patch

@@ -1,0 +1,33 @@
+Keep the .rld_map section in IRIX5-compatible output
+
+Upstream commit e6aea42dfaf13c0e0ca10fa604537a2f43ce9ae9 (Maciej W.
+Rozycki, 2012-12-03, PR ld/10629) replaced the .rld_map creation arm
+`IRIX_COMPAT (abfd) == ict_irix5 || IRIX_COMPAT (abfd) == ict_none` with
+`!use_rld_obj_head`. IRIX crt1.o defines __rld_obj_head, so the o32
+(ict_irix5) output no longer creates the section: DT_MIPS_RLD_MAP names a
+slot in the .sbss tail and the guest o32 smoke dies at startup, where the
+working 2.20.1 and SGUG 2.23.2 links carry the section and the map slot
+inside the RW segment. Restore the ict_irix5 arm while keeping the modern
+!use_rld_obj_head rule for every other MIPS target, and keep
+DT_MIPS_RLD_MAP_REL (upstream a5499fa464, 2015).
+
+Effect on the o32 hello signature: .rld_map reappears in the output and
+the runtime linker's map slot is inside the RW segment tail as in the
+2.20.1 baseline; see docs/binutils.md. Guest validation pending.
+
+--- a/bfd/elfxx-mips.c
++++ b/bfd/elfxx-mips.c
+@@ -8126,8 +8126,11 @@
+     return false;
+   htab->sstubs = s;
+ 
+-  if (!mips_elf_hash_table (info)->use_rld_obj_head
+-      && bfd_link_executable (info)
++  /* IRIX5-compatible output keeps the .rld_map marker even when crt1.o
++     supplies __rld_obj_head; upstream e6aea42dfa removed that arm.  */
++  if (bfd_link_executable (info)
++      && (IRIX_COMPAT (abfd) == ict_irix5
++	  || !mips_elf_hash_table (info)->use_rld_obj_head)
+       && bfd_get_linker_section (abfd, ".rld_map") == NULL)
+     {
+       s = bfd_make_section_anyway_with_flags (abfd, ".rld_map",

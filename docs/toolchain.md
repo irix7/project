@@ -78,7 +78,7 @@ the expected interpreter (`/usr/lib/libc.so.1` for o32,
 sysroot contents:
 
 ```sh
-scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2/prefix
+scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2.0/prefix
 ```
 
 The check goes GREEN only against a prefix rebuilt from the patched series;
@@ -226,7 +226,7 @@ freestanding probes; it is guest-free and reads the capture's headers in
 place. Run it against a rebuilt prefix as:
 
 ```sh
-scripts/test-hosted-stdint.sh --prefix .scratch/toolchain-16.2/prefix \
+scripts/test-hosted-stdint.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
 ```
 
@@ -272,7 +272,7 @@ The common-symbol alignment contract (issue #28) has a guest-free
 regression too:
 
 ```sh
-scripts/test-common-align.sh --prefix .scratch/toolchain-16.2/prefix
+scripts/test-common-align.sh --prefix .scratch/toolchain-16.2.0/prefix
 ```
 
 It compiles synthetic ordinary and 64-byte-aligned tentative definitions
@@ -285,11 +285,24 @@ assumption agrees. The series keeps upstream's `true` for
 assembles with GNU as (`--with-gnu-as`), which accepts the three-operand
 directive — so common alignment is not weakened for any MIPS target.
 
+The runtime half of that contract has a committed fixture,
+`scripts/smoke/common-align.c`, run on the guest through the smoke harness
+for both ABIs (the same source links under `-fno-common`, checked host-side):
+
+```sh
+scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
+    --cflags "-O2 -fcommon" scripts/smoke/common-align.c \
+    scripts/smoke/common-align.expected
+scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
+    --cflags "-O2 -fcommon" scripts/smoke/common-align.c \
+    scripts/smoke/common-align.expected
+```
+
 The sysroot-override driver regression is guest-free too; see
 [Sysroot overrides](#sysroot-overrides):
 
 ```sh
-scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2/prefix
+scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2.0/prefix
 ```
 
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify

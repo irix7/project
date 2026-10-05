@@ -83,7 +83,11 @@ private working copy `822f4fc`, 30,517 text files, 3,761,598 long lines,
     matching the private installation guide. These are short
     console-interface strings the rig must recognise to drive the proprietary
     installer; they are not program-source excerpts. They are recorded here as
-    findings metadata for the maintainer and are not removed by this issue.
+    findings metadata for the maintainer and are not removed by this issue:
+    whether these interface strings may remain, and every history question,
+    is a maintainer judgement referred to issue #36
+    (<https://github.com/irix7/project/issues/36>). This document attests
+    what was found; it does not grant the exception.
 
 No tracked sysroot, generated SGI message/header content or rebuilt binary was
 found: no tracked file carries ELF or ar magic or NUL bytes,

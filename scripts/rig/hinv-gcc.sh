@@ -45,7 +45,7 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 
 # The acceptance cross is #6's GCC 16.2 prefix; --prefix overrides it, which
 # is what the 15.2 bring-up datapoint uses.
-PREFIX=${HINV_GCC_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2/prefix}
+PREFIX=${HINV_GCC_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2.0/prefix}
 SYSROOT=${HINV_GCC_SYSROOT:-}
 TREE=${IRIX_SRC_TREE:-/home/matt/projects/irix-6.5.7m-src}
 OUT=${HINV_GCC_OUT:-${REPO_ROOT}/.scratch/hinv-gcc}
@@ -62,7 +62,7 @@ Cross-build the tree's irix/cmd/hinv/hinv.c, link it dynamically n32 against
 the captured sysroot, optionally run it on the guest and diff its stdout
 against $RIG_ORACLE_DIR/hinv-reference/hinv.output.
 
-  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
+  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2.0/prefix)
   --sysroot DIR    sysroot to pass to GCC; default is the cross's configured
                    sysroot (gcc -print-sysroot)
   --tree DIR       IRIX source checkout (default $IRIX_SRC_TREE or
@@ -159,7 +159,7 @@ if [ "$PRINT_COMMANDS" -eq 1 ]; then
 	exit 0
 fi
 
-[ -d "$PREFIX" ] || die "toolchain prefix not found: $PREFIX (run scripts/build-toolchain.sh, or wait for #6's .scratch/toolchain-16.2/READY)"
+[ -d "$PREFIX" ] || die "toolchain prefix not found: $PREFIX (run scripts/build-toolchain.sh, or wait for #6's .scratch/toolchain-16.2.0/READY)"
 [ -x "$CC" ] || die "cross compiler not found: $CC"
 [ -x "$READELF" ] || die "cross readelf not found: $READELF"
 [ -f "$SRC" ] || die "tree source not found: $SRC (pass --tree DIR)"

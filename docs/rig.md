@@ -96,7 +96,6 @@ follows in issue #5.
 The MIPSpro oracle install, reference build and sysroot capture build on them;
 see `docs/oracle.md`.
 
-<<<<<<< HEAD
 ## Socket identity
 
 Every script and driver that speaks to the guest addresses the selected
@@ -143,7 +142,10 @@ carry this rig's `--config` path and `--ci`; a missing or unreadable process,
 a non-numeric PID or any mismatch means "not ours". `stop-rig.sh` signals
 only a verified PID (SIGTERM, then SIGKILL after a bounded wait) and otherwise
 refuses with a clear message, leaving the socket, the pid file and the
-process untouched for inspection. A zombie is treated as dead.
+process untouched for inspection. A verified PID that survives the signals is
+refused the same way and never reported stopped — with or without a socket —
+so `--fresh` cannot delete a disk under a live emulator. A zombie is treated
+as dead.
 
 `--fresh` stops the guest first, then requires quiescence
 (`rig_require_stopped`: no socket present and no live recorded pid) before it

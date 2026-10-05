@@ -19,7 +19,7 @@
 #
 # Usage: scripts/smoke.sh [options] SOURCE EXPECTED
 #
-#   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
+#   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2.0/prefix)
 #   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
 #                    configured sysroot (gcc -print-sysroot)
 #   --abi ABI        o32 (default) or n32; mapped to -mabi=32|n32
@@ -39,7 +39,7 @@ TARGET=mips-sgi-irix6.5
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-PREFIX=${SMOKE_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2/prefix}
+PREFIX=${SMOKE_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2.0/prefix}
 SYSROOT=
 ABI=o32
 CFLAGS=
@@ -55,7 +55,7 @@ Compile SOURCE with the cross under test, link it dynamically against the
 captured sysroot, run it on the IRIX guest and diff its stdout against
 EXPECTED.
 
-  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
+  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2.0/prefix)
   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
                    configured sysroot (gcc -print-sysroot)
   --abi ABI        o32 (default) or n32; mapped to -mabi=32|n32

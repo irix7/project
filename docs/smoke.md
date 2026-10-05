@@ -54,15 +54,15 @@ rebuild is:
 
 ```sh
 nix develop --command bash -c \
-	'scripts/build-toolchain.sh --work-dir .scratch/toolchain-16.2 \
+	'scripts/build-toolchain.sh --work-dir .scratch/toolchain-16.2.0 \
 		--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot --languages c'
-scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2/prefix \
+scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--gcc-version 16.2.0
 ```
 
 That recipe is issue #6; the series layout and provenance are in
 `docs/toolchain.md`. smoke.sh defaults `--prefix` to
-`.scratch/toolchain-16.2/prefix`, the cross under test. The original 15.2
+`.scratch/toolchain-16.2.0/prefix`, the cross under test. The original 15.2
 baseline at `.scratch/toolchain/prefix` stays reproducible with
 `--gcc 15.2.0 --work-dir .scratch/toolchain` and can still be exercised with
 `smoke.sh --prefix .scratch/toolchain/prefix`.

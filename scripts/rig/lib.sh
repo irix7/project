@@ -147,6 +147,14 @@ rig_pid_is_ours() {
 	[ -n "$has_ci" ] && [ -n "$has_config" ]
 }
 
+# rig_signal PID SIGNAL: send SIGNAL (a name or number) to PID, never
+# failing the caller. RIG_KILL_CMD exists for the fault-injection tests: a
+# stub signaller that cannot stop the process proves stop-rig.sh never
+# reports a verified emulator stopped while it is still alive.
+rig_signal() {
+	"${RIG_KILL_CMD:-kill}" "-$2" "$1" 2>/dev/null || true
+}
+
 # Conservative quiescence proof for destructive operations. Must be called
 # under the guest lock. A socket that is still present, or any live pid in the
 # pid file (ours or not: identity cannot always be proven), means the caller

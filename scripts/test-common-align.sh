@@ -26,7 +26,7 @@
 #
 #   scripts/test-common-align.sh --prefix <rebuilt-prefix>
 #
-# The default prefix is $IRIX_PREFIX, then $PWD/.scratch/toolchain-16.2/prefix;
+# The default prefix is $IRIX_PREFIX, then $PWD/.scratch/toolchain-16.2.0/prefix;
 # when neither exists the script skips instead of failing.
 #
 # Usage: scripts/test-common-align.sh [--prefix DIR]
@@ -42,7 +42,7 @@ usage() {
 Usage: scripts/test-common-align.sh [--prefix DIR]
 
   --prefix DIR    installation prefix of the cross toolchain
-                  (default: $IRIX_PREFIX, then .scratch/toolchain-16.2/prefix)
+                  (default: $IRIX_PREFIX, then .scratch/toolchain-16.2.0/prefix)
   -h, --help      show this help
 EOF
 }
@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-[ -n "$PREFIX" ] || PREFIX=${IRIX_PREFIX:-$PWD/.scratch/toolchain-16.2/prefix}
+[ -n "$PREFIX" ] || PREFIX=${IRIX_PREFIX:-$PWD/.scratch/toolchain-16.2.0/prefix}
 
 if [ ! -d "$PREFIX" ]; then
 	if [ "$PREFIX_SET" -eq 1 ]; then

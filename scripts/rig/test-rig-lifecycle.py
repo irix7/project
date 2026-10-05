@@ -281,6 +281,28 @@ class StopRigTest(RigTestCase):
         self.assertFalse(self.pid_file.exists())
         self.assertIn("stopped", result.stdout)
 
+    def test_verified_pid_that_survives_signals_is_refused(self):
+        # Fault injection: a signaller that cannot stop the process stands in
+        # for an unkillable emulator, with the fake quit having removed the
+        # socket. stop-rig.sh must not report success or remove the pid file
+        # while a verified emulator is still alive, or --fresh would delete
+        # the disk under it.
+        self.bind_socket()
+        proc = self.shaped_emulator()
+        self.pid_file.write_text(f"{proc.pid}\n")
+        self.write_fake_ic(quit_removes_socket=True)
+        fake_kill = self.root / "fake-kill.sh"
+        fake_kill.write_text("#!/usr/bin/env bash\nexit 1\n")
+        fake_kill.chmod(0o755)
+        self.env["RIG_KILL_CMD"] = str(fake_kill)
+
+        result = self.run_script(STOP, "--timeout", "1", timeout=60)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(proc.poll(), "the verified emulator was unexpectedly stopped")
+        self.assertTrue(self.pid_file.exists(), "the pid file was removed under a live emulator")
+        self.assertIn("still alive after SIGKILL", result.stdout)
+
 
 class FreshResetTest(RigTestCase):
     def setUp(self):

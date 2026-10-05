@@ -32,7 +32,7 @@ set -euo pipefail
 
 TARGET=mips-sgi-irix6.5
 
-PREFIX=${IRIX_PREFIX:-${PWD}/.scratch/toolchain-16.2/prefix}
+PREFIX=${IRIX_PREFIX:-${PWD}/.scratch/toolchain-16.2.0/prefix}
 SYSROOT=
 SYSROOT_EXPLICIT=0
 
@@ -44,7 +44,7 @@ Compile hosted, include-order, C++ (when available) and freestanding
 <stdint.h> probes for the IRIX 6.5 cross under test.
 
   --prefix DIR     cross installation prefix
-                   (default $IRIX_PREFIX or $PWD/.scratch/toolchain-16.2/prefix)
+                   (default $IRIX_PREFIX or $PWD/.scratch/toolchain-16.2.0/prefix)
   --sysroot DIR    capture to compile the native-header probes against
                    (default: gcc -print-sysroot)
   -h, --help       show this help

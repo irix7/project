@@ -605,7 +605,7 @@ def run_on_guest(binary: Path, out: Path, timeout: int) -> tuple:
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tree", required=True, help="IRIX 6.5.7m source tree root")
-    parser.add_argument("--prefix", default=str(REPO_ROOT / ".scratch/toolchain-16.2/prefix"))
+    parser.add_argument("--prefix", default=str(REPO_ROOT / ".scratch/toolchain-16.2.0/prefix"))
     parser.add_argument("--sysroot", default=None, help="default: the cross's -print-sysroot")
     parser.add_argument("--out", default=str(REPO_ROOT / ".scratch/runtime"))
     parser.add_argument("--library", default=DEFAULT_LIBRARY)

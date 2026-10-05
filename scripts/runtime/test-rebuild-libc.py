@@ -170,7 +170,7 @@ class PreconditionsTest(unittest.TestCase):
         self.assertIn("cross tool not found", result.stderr)
 
     def test_fake_tree_is_rejected_with_a_usable_cross(self):
-        prefix = (HERE.parent.parent / ".scratch/toolchain-16.2/prefix").resolve()
+        prefix = (HERE.parent.parent / ".scratch/toolchain-16.2.0/prefix").resolve()
         if not (prefix / "bin" / f"{rebuild.TARGET}-gcc").exists():
             self.skipTest("cross not built in this checkout")
         with tempfile.TemporaryDirectory() as tmp:

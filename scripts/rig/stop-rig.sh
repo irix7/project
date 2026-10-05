@@ -70,24 +70,33 @@ stop_rig() {
 	# survives, SIGKILL. A stale/recycled PID never reaches these branches.
 	if [ "$pid_verified" -eq 1 ] && rig_pid_alive "$pid"; then
 		rig_log "sending SIGTERM to verified pid $pid"
-		kill "$pid" 2>/dev/null || true
+		rig_signal "$pid" TERM
 		rig_wait_dead "$pid" || true
 	fi
 	if [ "$pid_verified" -eq 1 ] && rig_pid_alive "$pid"; then
 		rig_log "still alive; sending SIGKILL to verified pid $pid"
-		kill -9 "$pid" 2>/dev/null || true
+		rig_signal "$pid" KILL
 		rig_wait_dead "$pid" || true
 	fi
 
+	# A verified emulator that survived SIGKILL is never reported stopped,
+	# with or without a socket: the caller must not go on to delete disks or
+	# NVRAM under a live process.
+	if [ "$pid_verified" -eq 1 ] && rig_pid_alive "$pid"; then
+		rig_log "verified pid $pid is still alive after SIGKILL"
+		rig_log "leaving socket and pid file in place for inspection"
+		exit 1
+	fi
+
 	if [ -S "$RIG_SOCKET" ]; then
-		if [ "$pid_verified" -eq 1 ] && ! rig_pid_alive "$pid"; then
+		if [ "$pid_verified" -eq 1 ]; then
 			rig_log "removing stale socket $RIG_SOCKET (verified pid $pid exited)"
 			rm -f "$RIG_SOCKET"
 		else
-			if [ "$pid_verified" -eq 1 ]; then
-				rig_log "pid $pid survived SIGKILL on socket $RIG_SOCKET"
+			if [ -n "$pid" ]; then
+				rig_log "refusing to signal pid $pid from $RIG_PID_FILE: not this rig's emulator (exe/cmdline check)"
 			else
-				rig_log "refusing to signal pid ${pid:-<none>} from $RIG_PID_FILE: not this rig's emulator (exe/cmdline check)"
+				rig_log "refusing to remove socket $RIG_SOCKET: no verified pid in $RIG_PID_FILE"
 			fi
 			rig_log "leaving socket and pid file in place for inspection"
 			exit 1

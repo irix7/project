@@ -34,7 +34,7 @@
 # Usage: scripts/test-sysroot-override.sh [--prefix DIR] [--configured-root DIR]
 #
 #   --prefix DIR            cross prefix (default $IRIX_PREFIX, then
-#                           <repo>/.scratch/toolchain-16.2/prefix); a missing
+#                           <repo>/.scratch/toolchain-16.2.0/prefix); a missing
 #                           prefix is skipped cleanly
 #   --configured-root DIR   root the prefix was configured with (default
 #                           $CC -print-sysroot)
@@ -46,7 +46,7 @@ TARGET=mips-sgi-irix6.5
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-PREFIX=${IRIX_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2/prefix}
+PREFIX=${IRIX_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2.0/prefix}
 CONFIGURED_ROOT=
 
 usage() {
@@ -57,7 +57,7 @@ Probe a cross driver's --sysroot handling for IRIX startfiles, libraries and
 headers. See the script header for what each probe checks.
 
   --prefix DIR            cross prefix (default $IRIX_PREFIX, then
-                          <repo>/.scratch/toolchain-16.2/prefix); a missing
+                          <repo>/.scratch/toolchain-16.2.0/prefix); a missing
                           prefix is skipped cleanly
   --configured-root DIR   root the prefix was configured with (default
                           $CC -print-sysroot)

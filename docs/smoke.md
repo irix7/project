@@ -10,7 +10,7 @@ lives beside it (`scripts/smoke/`), not inside it.
 ## Invocation
 
 ```sh
-scripts/smoke.sh [--prefix DIR] [--sysroot DIR] [--abi o32|n32|n64] \
+scripts/smoke.sh [--prefix DIR] [--sysroot DIR] [--abi o32|n32] \
 	[--cflags "..."] [--timeout SECONDS] SOURCE EXPECTED
 ```
 
@@ -30,10 +30,9 @@ sqrt(2) = 1.414214
 
 `hello.expected` is byte-for-byte the oracle's recorded o32 output. `--abi`
 defaults to o32, the Indy's native environment (ADR-0003), and is mapped to
-`-mabi=32|n32|64`. n64 cannot execute on the IP22/R4400 and the current
-capture cannot link it either (no `/usr/lib64/mips4/crt1.o` or n64 libc,
-issue #20), so it exists here for the n64 static-compare target, not as a
-runnable case.
+`-mabi=32|n32`. n64 is emitted by the multilib but outside the project's
+scope — the IP22/R4400 cannot execute it — so the harness rejects it rather
+than offering an unrunnable case (ADR-0003 scope note).
 `--cflags` is word-split and passed to both the compile and the link step, so
 `-O2`, `-lm` and `-pthread` need no script change. `--timeout` bounds each
 iris-ci call (default 300 seconds).

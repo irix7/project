@@ -154,7 +154,7 @@ so behaviour without a catalogue is unchanged. The kernel-only
   reads zero program headers and returns `ESRCH`, the correct "no DSOs"
   answer. The lock and thread entry points in the archive still resolve.
 - **o32 only.** The toolchain carries n32 and n64, but this proof is the
-  Indy's native ABI; the n64 execution limit is issue #20. n32/n64 runtime
+  Indy's native ABI; n64 is out of scope (ADR-0003 scope note). n32 runtime
   variants are later work.
 - **The quad-precision set is excluded.** The maths leaf's own
   `QUAD_WORD_CFILES`/`QUAD_WORD_ASFILES` (38 C and 2 asm sources) operate on

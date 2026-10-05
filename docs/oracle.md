@@ -99,9 +99,9 @@ not part of this capture.
   links dynamically against this capture (ADR-0006); the static proof now
   comes from the rebuilt runtime (`docs/runtime.md`, issue #9), which needs
   no SGI runtime at all.
-- **No n64 execution.** The IP22/R4400 kernel is 32-bit, so n64 binaries link
-  (with `-L/usr/lib64/abi`) but do not execute; the capture is o32 + n32 only.
-  n64 is a static-compare target on this rig — issue #20.
+- **No n64 execution.** The IP22/R4400 kernel is 32-bit, so n64 binaries do
+  not execute; n64 is outside the project's scope (ADR-0003 scope note), so
+  the oracle-verified set is o32 and n32.
 
 ## MIPSpro quirks worth remembering
 

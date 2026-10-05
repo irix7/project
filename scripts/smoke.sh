@@ -22,7 +22,7 @@
 #   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
 #   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
 #                    configured sysroot (gcc -print-sysroot)
-#   --abi ABI        o32 (default), n32 or n64; mapped to -mabi=32|n32|64
+#   --abi ABI        o32 (default) or n32; mapped to -mabi=32|n32
 #   --cflags FLAGS   extra flags, passed at compile and link (word-split)
 #   --timeout SEC    timeout for each iris-ci call (default 300)
 #   -h, --help       show this help
@@ -58,7 +58,7 @@ EXPECTED.
   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
                    configured sysroot (gcc -print-sysroot)
-  --abi ABI        o32 (default), n32 or n64; mapped to -mabi=32|n32|64
+  --abi ABI        o32 (default) or n32; mapped to -mabi=32|n32
   --cflags FLAGS   extra flags, passed at compile and link (word-split)
   --timeout SEC    timeout for each iris-ci call (default 300)
   -h, --help       show this help
@@ -100,8 +100,7 @@ EXPECTED=${2:-}
 case "$ABI" in
 	o32) MABI=32 ;;
 	n32) MABI=n32 ;;
-	n64) MABI=64 ;;
-	*) die "unknown ABI: $ABI (expected o32, n32 or n64)" ;;
+	*) die "unknown ABI: $ABI (expected o32 or n32; n64 is out of scope, ADR-0003)" ;;
 esac
 
 [ -f "$SOURCE" ] || die "source not found: $SOURCE"

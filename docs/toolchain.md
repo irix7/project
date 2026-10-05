@@ -30,7 +30,9 @@ ABI (ADR-0003). `--languages c` is all the smoke harness needs; adding
 `c,c++` builds the libstdc++ IRIX layer as well, which is carried for the
 C++ deliverable but not exercised by the C-only acceptance (issue #6). A
 `c,c++` build currently stops at libstdc++'s n64 multilib configure because
-the capture has no n64 libc (issue #20); the C layer is unaffected.
+there is no n64 link target on the rig; n64 is out of scope (ADR-0003 scope
+note), so the C++ multilib cut is knowingly deferred and the C layer is
+unaffected.
 
 The smoke harness then proves the dynamic path in the guest (ADR-0006):
 
@@ -41,12 +43,11 @@ scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix --abi n32 \
 	--cflags "-lm" oracle/hello.c scripts/smoke/hello.expected
 ```
 
-n64 objects compile (ELF64 big-endian MIPS IV, checked by
-`verify-toolchain.sh`) but cannot execute on the IP22/R4400, and the current
-sysroot capture cannot link an n64 executable either: it has no
-`/usr/lib64/mips4/crt1.o` and no n64 libc. The same link fails with the 15.2
-baseline compiler, so it is a capture gap tracked with the other n64 limits
-(issue #20), not a regression in this series.
+The multilib still emits n64 objects, but n64 is outside the project's
+scope: the IP22/R4400 guest is 32-bit and cannot execute them, and no 64-bit
+target is planned (ADR-0003 scope note). `verify-toolchain.sh` therefore
+checks o32 and n32 only, the smoke harness accepts only those two ABIs, and
+full-tree acceptance records n64 products as exceptions.
 
 ## Pinned upstream sources
 

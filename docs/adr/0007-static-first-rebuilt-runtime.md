@@ -19,6 +19,6 @@ milestone); linking the rebuilt static archive with SGI's dynamic `crt1.o`
 proof).
 
 **Consequences**: the smoke harness remains dynamic against the captured
-sysroot; the runtime rebuild script carries the o32 boundary; n32/n64 runtime
+sysroot; the runtime rebuild script carries the o32 boundary; n32 runtime
 variants and the shared archive are later work (#10, #14), as is the native
-bootstrap (#15).
+bootstrap (#15). n64 is out of scope (ADR-0003 scope note).

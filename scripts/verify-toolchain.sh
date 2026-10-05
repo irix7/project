@@ -2,13 +2,12 @@
 #
 # Verify an installed IRIX 6.5 cross toolchain.
 #
-# Compiles a trivial translation unit for each IRIX ABI and checks the ELF
-# headers with the toolchain's own readelf and objdump: big-endian MIPS, ELF32
-# with the MIPS II flags for o32, ELF32 with EF_MIPS_ABI2 and MIPS III for n32,
-# and ELF64 with the MIPS IV flags for n64. As in IRIX and historic GCC, o32
-# and n64 carry no EF_MIPS_ABI bits: n32 is the one marked by EF_MIPS_ABI2,
-# while the ISA level separates o32 from n64. The default ABI (no -mabi flag)
-# must be o32, matching the IRIX 6.5 environment.
+# Compiles a trivial translation unit for each in-scope IRIX ABI and checks
+# the ELF headers with the toolchain's own readelf and objdump: big-endian
+# MIPS, ELF32 with the MIPS II flags for o32, and ELF32 with EF_MIPS_ABI2 and
+# MIPS III for n32. The default ABI (no -mabi flag) must be o32, matching the
+# IRIX 6.5 environment. n64 is emitted by the multilib but outside the
+# project's scope: the IP22 cannot execute it (ADR-0003 scope note).
 #
 # The compiler-version assertion is parameterised so the same script checks
 # the 16.2 series and the 15.x fallback builds; every ELF check is identical
@@ -113,7 +112,6 @@ EF_MIPS_ABI2=0x20
 EF_MIPS_ARCH=0xf0000000
 EF_MIPS_ARCH_2=0x10000000
 EF_MIPS_ARCH_3=0x20000000
-EF_MIPS_ARCH_4=0x30000000
 
 # --- o32 -------------------------------------------------------------------
 compile "${tmpdir}/o32.o" -mabi=32
@@ -148,18 +146,5 @@ if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_3 )); then
 	die "n32: expected the MIPS III ISA (flags ${flags_hex})"
 fi
 pass "n32: ELF32 big-endian MIPS III with EF_MIPS_ABI2 (-mabi=n32)"
-
-# --- n64 -------------------------------------------------------------------
-compile "${tmpdir}/n64.o" -mabi=64
-elf_header_fields "${tmpdir}/n64.o"
-check_common n64 "${tmpdir}/n64.o"
-[ "$class" = ELF64 ] || die "n64: expected ELF64, got ${class}"
-if (( flags & EF_MIPS_ABI2 )); then
-	die "n64: unexpected EF_MIPS_ABI2 flag"
-fi
-if (( (flags & EF_MIPS_ARCH) != EF_MIPS_ARCH_4 )); then
-	die "n64: expected the MIPS IV ISA (flags ${flags_hex})"
-fi
-pass "n64: ELF64 big-endian MIPS IV (-mabi=64)"
 
 echo "all checks passed"

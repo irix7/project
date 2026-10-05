@@ -54,6 +54,37 @@ target is planned (ADR-0003 scope note). `verify-toolchain.sh` therefore
 checks o32 and n32 only, the smoke harness accepts only those two ABIs, and
 full-tree acceptance records n64 products as exceptions.
 
+## Sysroot overrides
+
+The IRIX startfile, library and endfile specs take every sysroot-derived
+path from the driver's runtime `%R`. `%R` expands to the command-line
+`--sysroot` when one is given and to the configured `--with-sysroot`
+otherwise (the default `gcc -print-sysroot`), so headers (`-isysroot`),
+startfiles and the ISA `-L` directories always name the one requested root.
+No capture-specific absolute path is baked into the specs: a cross built
+against one capture links against another with `--sysroot`, and a
+sysroot-less invocation keeps the configured default. The n64 spec branches
+use `%R` as well, but n64 linking stays out of scope (ADR-0003 scope note).
+
+`scripts/test-sysroot-override.sh` is the guest-free driver-spec
+regression. With two synthetic, public, empty-marker roots it checks that
+o32 and n32 `-###` link traces for `--sysroot=B` and `--sysroot=C` name no
+path from the configured root and take every startfile and `-L` directory
+from the requested root, that `-E -v` searches the requested root's headers
+(so headers and runtime inputs converge), and that the configured-root
+default still names the expected IRIX startfiles and links a binary with
+the expected interpreter (`/usr/lib/libc.so.1` for o32,
+`/usr/lib32/libc.so.1` for n32). It needs only a prefix and never copies
+sysroot contents:
+
+```sh
+scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2/prefix
+```
+
+The check goes GREEN only against a prefix rebuilt from the patched series;
+a driver built before the `%R` fix fails the n32 replacement-root probe by
+design.
+
 ## Pinned upstream sources
 
 The script verifies every download against a pinned sha256, computed from
@@ -219,6 +250,13 @@ assumption agrees. The series keeps upstream's `true` for
 `mips_declare_common_object`'s alignment-operand switch — the toolchain
 assembles with GNU as (`--with-gnu-as`), which accepts the three-operand
 directive — so common alignment is not weakened for any MIPS target.
+
+The sysroot-override driver regression is guest-free too; see
+[Sysroot overrides](#sysroot-overrides):
+
+```sh
+scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2/prefix
+```
 
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify
 output, smoke logs and readelf proof) lives under

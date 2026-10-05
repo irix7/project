@@ -3,9 +3,9 @@ IRIX MIPS target macros and headers
 Add gcc/config/mips/iris.h, iris5.h and iris6.h: the OS predefines
 (sgi, unix, SYSTYPE_SVR4, _LONGLONG, _SGI_SOURCE), SVR4/MIPS ABI width
 types, the driver self-specs that force -mabi=32 and the MIPS II/III/IV
-ISAs, the STARTFILE/LIB/ENDFILE specs that name the captured sysroot's
-crt1.o/crtn.o, libc and libm, and the IRIX-specific link and codegen
-hooks.
+ISAs, the STARTFILE/LIB/ENDFILE specs that name the selected sysroot's
+crt1.o/crtn.o, libc and libm through the driver's runtime %R, and the
+IRIX-specific link and codegen hooks.
 
 mips.h gains the TARGET_IRIX/TARGET_IRIX6 macros (0 by default,
 overridden by the IRIX headers), suppresses the builtin "machine=mips"
@@ -16,6 +16,12 @@ Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
 Rebase note: MIPS_TFMODE_FORMAT's value mips_extended_format no longer
 exists in 16.2 (or 15.2); the define is inert. It is carried unchanged
 for fidelity with the pdaxrom series rather than re-derived.
+Sysroot note: the pdaxrom series bakes TARGET_SYSTEM_ROOT into the
+startfile and library paths, so a command-line --sysroot changes the
+headers but keeps the configured capture's startfiles and ISA -L
+directories, mixing runtime inputs from two installations. This series
+uses the driver's runtime %R instead: one requested sysroot supplies
+headers, startfiles and libraries together (audit C7, issue #29).
 
 diff --git a/gcc/config/mips/iris.h b/gcc/config/mips/iris.h
 new file mode 100644
@@ -322,7 +328,7 @@ new file mode 100644
 index 000000000..c80d82cf2
 --- /dev/null
 +++ b/gcc/config/mips/iris6.h
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,141 @@
 +/* Definitions of target machine for GNU compiler.  IRIX version 6.
 +   Copyright (C) 1994, 1995, 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004,
 +   2005, 2006, 2007, 2008, 2010
@@ -411,12 +417,6 @@ index 000000000..c80d82cf2
 +   %{mabi=32: -32}%{mabi=n32: -n32}%{mabi=64: -64}%{!mabi*: -n32}"
 +#endif
 +
-+#ifdef TARGET_SYSTEM_ROOT
-+#define IRIX_SYSTEM_ROOT TARGET_SYSTEM_ROOT
-+#else
-+#define IRIX_SYSTEM_ROOT
-+#endif
-+
 +/* Profiling is supported via libprof1.a not -lc_p as in IRIX 3.  */
 +#undef STARTFILE_SPEC
 +#define STARTFILE_SPEC \
@@ -424,26 +424,26 @@ index 000000000..c80d82cf2
 +     %{mabi=32:%{pg:gcrt1.o%s} \
 +       %{!pg:%{p:mcrt1.o%s libprof1.a%s}%{!p:crt1.o%s}}} \
 +     %{mabi=n32: \
-+       %{mips4:%{pg:" IRIX_SYSTEM_ROOT "/usr/lib32/mips4/gcrt1.o%s} \
-+         %{!pg:%{p:" IRIX_SYSTEM_ROOT "/usr/lib32/mips4/mcrt1.o%s " IRIX_SYSTEM_ROOT "/usr/lib32/mips4/libprof1.a%s} \
-+           %{!p:" IRIX_SYSTEM_ROOT "/usr/lib32/mips4/crt1.o%s}}} \
-+       %{!mips4:%{pg:" IRIX_SYSTEM_ROOT "/usr/lib32/mips3/gcrt1.o%s} \
-+         %{!pg:%{p:" IRIX_SYSTEM_ROOT "/usr/lib32/mips3/mcrt1.o%s " IRIX_SYSTEM_ROOT "/usr/lib32/mips3/libprof1.a%s} \
-+           %{!p:" IRIX_SYSTEM_ROOT "/usr/lib32/mips3/crt1.o%s}}}} \
++       %{mips4:%{pg:%R/usr/lib32/mips4/gcrt1.o%s} \
++         %{!pg:%{p:%R/usr/lib32/mips4/mcrt1.o%s %R/usr/lib32/mips4/libprof1.a%s} \
++           %{!p:%R/usr/lib32/mips4/crt1.o%s}}} \
++       %{!mips4:%{pg:%R/usr/lib32/mips3/gcrt1.o%s} \
++         %{!pg:%{p:%R/usr/lib32/mips3/mcrt1.o%s %R/usr/lib32/mips3/libprof1.a%s} \
++           %{!p:%R/usr/lib32/mips3/crt1.o%s}}}} \
 +     %{mabi=64: \
-+       %{mips4:%{pg:" IRIX_SYSTEM_ROOT "/usr/lib64/mips4/gcrt1.o} \
-+         %{!pg:%{p:" IRIX_SYSTEM_ROOT "/usr/lib64/mips4/mcrt1.o " IRIX_SYSTEM_ROOT "/usr/lib64/mips4/libprof1.a} \
-+           %{!p:" IRIX_SYSTEM_ROOT "/usr/lib64/mips4/crt1.o}}} \
-+       %{!mips4:%{pg:" IRIX_SYSTEM_ROOT "/usr/lib64/mips3/gcrt1.o} \
-+         %{!pg:%{p:" IRIX_SYSTEM_ROOT "/usr/lib64/mips3/mcrt1.o " IRIX_SYSTEM_ROOT "/usr/lib64/mips3/libprof1.a} \
-+           %{!p:" IRIX_SYSTEM_ROOT "/usr/lib64/mips3/crt1.o}}}}} \
++       %{mips4:%{pg:%R/usr/lib64/mips4/gcrt1.o} \
++         %{!pg:%{p:%R/usr/lib64/mips4/mcrt1.o %R/usr/lib64/mips4/libprof1.a} \
++           %{!p:%R/usr/lib64/mips4/crt1.o}}} \
++       %{!mips4:%{pg:%R/usr/lib64/mips3/gcrt1.o} \
++         %{!pg:%{p:%R/usr/lib64/mips3/mcrt1.o %R/usr/lib64/mips3/libprof1.a} \
++           %{!p:%R/usr/lib64/mips3/crt1.o}}}}} \
 +  irix-crti.o%s crtbegin.o%s"
 +
 +#undef LIB_SPEC
 +#define LIB_SPEC \
-+  "%{mabi=n32: %{mips4:-L" IRIX_SYSTEM_ROOT "/usr/lib32/mips4} %{!mips4:-L" IRIX_SYSTEM_ROOT "/usr/lib32/mips3} \
++  "%{mabi=n32: %{mips4:-L%R/usr/lib32/mips4} %{!mips4:-L%R/usr/lib32/mips3} \
 +     } \
-+   %{mabi=64: %{mips4:-L" IRIX_SYSTEM_ROOT "/usr/lib64/mips4} %{!mips4:-L" IRIX_SYSTEM_ROOT "/usr/lib64/mips3} \
++   %{mabi=64: %{mips4:-L%R/usr/lib64/mips4} %{!mips4:-L%R/usr/lib64/mips3} \
 +     } \
 +   %{!shared:" \
 +     SUBTARGET_DONT_WARN_UNUSED_SPEC \
@@ -461,10 +461,10 @@ index 000000000..c80d82cf2
 +  "crtend.o%s irix-crtn.o%s \
 +   %{!shared: \
 +     %{mabi=32:crtn.o%s}\
-+     %{mabi=n32:%{mips4:" IRIX_SYSTEM_ROOT "/usr/lib32/mips4/crtn.o%s}\
-+       %{!mips4:" IRIX_SYSTEM_ROOT "/usr/lib32/mips3/crtn.o%s}}\
-+     %{mabi=64:%{mips4:" IRIX_SYSTEM_ROOT "/usr/lib64/mips4/crtn.o%s}\
-+       %{!mips4:" IRIX_SYSTEM_ROOT "/usr/lib64/mips3/crtn.o%s}}}"
++     %{mabi=n32:%{mips4:%R/usr/lib32/mips4/crtn.o%s}\
++       %{!mips4:%R/usr/lib32/mips3/crtn.o%s}}\
++     %{mabi=64:%{mips4:%R/usr/lib64/mips4/crtn.o%s}\
++       %{!mips4:%R/usr/lib64/mips3/crtn.o%s}}}"
 +
 +#define MIPS_TFMODE_FORMAT mips_extended_format
 +

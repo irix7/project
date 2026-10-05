@@ -80,6 +80,7 @@ if [ ! -d "$PREFIX" ]; then
 	skip "toolchain prefix not found: $PREFIX"
 	exit 0
 fi
+PREFIX=$(cd "$PREFIX" && pwd)
 
 CC="${PREFIX}/bin/${TARGET}-gcc"
 if [ ! -x "$CC" ]; then

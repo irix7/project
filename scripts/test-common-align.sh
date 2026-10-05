@@ -73,6 +73,7 @@ if [ ! -d "$PREFIX" ]; then
 	echo "skip: toolchain prefix not found: $PREFIX"
 	exit 0
 fi
+PREFIX=$(cd "$PREFIX" && pwd)
 
 CC="${PREFIX}/bin/${TARGET}-gcc"
 AS="${PREFIX}/bin/${TARGET}-as"
@@ -156,8 +157,8 @@ check_assumption() {
 
 for abi in 32 n32; do
 	case "$abi" in
-		32) abiname=o32 ;;
-		n32) abiname=n32 ;;
+		32) abiname=o32; ordinary_align=4 ;;
+		n32) abiname=n32; ordinary_align=8 ;;
 	esac
 	for common in fcommon fno-common; do
 		label="${abiname} -${common}"
@@ -178,16 +179,16 @@ for abi in 32 n32; do
 		if [ "$common" = fcommon ]; then
 			grep -qE '^[[:space:]]*\.comm[[:space:]]+aligned_slot,64,64[[:space:]]*$' "$asm" ||
 				die "${label}: .comm has no 64-byte alignment operand"
-			grep -qE '^[[:space:]]*\.comm[[:space:]]+ordinary_slot,32,4[[:space:]]*$' "$asm" ||
-				die "${label}: .comm has no 4-byte alignment operand"
+			grep -qE "^[[:space:]]*\.comm[[:space:]]+ordinary_slot,32,${ordinary_align}[[:space:]]*$" "$asm" ||
+				die "${label}: .comm has no ${ordinary_align}-byte alignment operand"
 			[ "$(sym_field "$obj" aligned_slot 7)" = COM ] ||
 				die "${label}: aligned_slot is not a common symbol"
 			aligned_obj_align=$(sym_value "$obj" aligned_slot)
 			[ "$aligned_obj_align" -eq 64 ] ||
 				die "${label}: object records alignment ${aligned_obj_align}, expected 64"
 			ordinary_obj_align=$(sym_value "$obj" ordinary_slot)
-			[ "$ordinary_obj_align" -eq 4 ] ||
-				die "${label}: object records alignment ${ordinary_obj_align}, expected 4"
+			[ "$ordinary_obj_align" -eq "$ordinary_align" ] ||
+				die "${label}: object records alignment ${ordinary_obj_align}, expected ${ordinary_align}"
 		else
 			aligned_obj_align=$(bss_alignment "$obj")
 			[ "$aligned_obj_align" -eq 64 ] ||
@@ -196,16 +197,16 @@ for abi in 32 n32; do
 			[ $((aligned_off % 64)) -eq 0 ] ||
 				die "${label}: aligned_slot offset ${aligned_off} is not 64-aligned"
 			ordinary_off=$(sym_value "$obj" ordinary_slot)
-			[ $((ordinary_off % 4)) -eq 0 ] ||
-				die "${label}: ordinary_slot offset ${ordinary_off} is not 4-aligned"
+			[ $((ordinary_off % ordinary_align)) -eq 0 ] ||
+				die "${label}: ordinary_slot offset ${ordinary_off} is not ${ordinary_align}-aligned"
 		fi
 
 		aligned_addr=$(sym_value "$elf" aligned_slot)
 		ordinary_addr=$(sym_value "$elf" ordinary_slot)
 		[ $((aligned_addr % 64)) -eq 0 ] ||
 			die "${label}: linked aligned_slot at 0x$(printf '%x' "$aligned_addr") is not 64-aligned"
-		[ $((ordinary_addr % 4)) -eq 0 ] ||
-			die "${label}: linked ordinary_slot at 0x$(printf '%x' "$ordinary_addr") is not 4-aligned"
+		[ $((ordinary_addr % ordinary_align)) -eq 0 ] ||
+			die "${label}: linked ordinary_slot at 0x$(printf '%x' "$ordinary_addr") is not ${ordinary_align}-aligned"
 
 		check_assumption "$probe_asm" "$label"
 		pass "${label}: requested alignment survives .comm/.bss, linking and the compiler assumption"

@@ -1,0 +1,240 @@
+libgcc/libgomp IRIX runtime adjustments
+
+IRIX 6.5 pthreads lack pthread_rwlock_*, pthread_equal, sched_yield and
+pthread_mutexattr_settype, so gthr-posix.h must not reference them.
+libgcov maps anonymous memory from /dev/zero because IRIX has no
+MAP_ANONYMOUS. libgomp reads _SC_NPROC_ONLN instead of _SC_NPROCESSORS_ONLN
+and links itself against -lpthread.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
+
+diff --git a/libgcc/gthr-posix.h b/libgcc/gthr-posix.h
+index 3984d0666..3ae46d217 100644
+--- a/libgcc/gthr-posix.h
++++ b/libgcc/gthr-posix.h
+@@ -64,7 +64,7 @@ typedef pthread_key_t __gthread_key_t;
+ typedef pthread_once_t __gthread_once_t;
+ typedef pthread_mutex_t __gthread_mutex_t;
+ #ifndef __cplusplus
+-typedef pthread_rwlock_t __gthread_rwlock_t;
++/*typedef pthread_rwlock_t __gthread_rwlock_t;*/
+ #endif
+ typedef pthread_mutex_t __gthread_recursive_mutex_t;
+ typedef pthread_cond_t __gthread_cond_t;
+@@ -126,13 +126,13 @@ __gthrw(pthread_setspecific)
+ 
+ __gthrw(pthread_create)
+ __gthrw(pthread_join)
+-__gthrw(pthread_equal)
++/*__gthrw(pthread_equal)*/
+ __gthrw(pthread_self)
+ __gthrw(pthread_detach)
+ #ifndef __BIONIC__
+ __gthrw(pthread_cancel)
+ #endif
+-__gthrw(sched_yield)
++/*__gthrw(sched_yield)*/
+ 
+ __gthrw(pthread_mutex_lock)
+ __gthrw(pthread_mutex_trylock)
+@@ -153,15 +153,15 @@ __gthrw(pthread_cond_destroy)
+ __gthrw(pthread_key_create)
+ __gthrw(pthread_key_delete)
+ __gthrw(pthread_mutexattr_init)
+-__gthrw(pthread_mutexattr_settype)
++/*__gthrw(pthread_mutexattr_settype)*/
+ __gthrw(pthread_mutexattr_destroy)
+ 
+ #ifndef __cplusplus
+-__gthrw(pthread_rwlock_rdlock)
+-__gthrw(pthread_rwlock_tryrdlock)
+-__gthrw(pthread_rwlock_wrlock)
+-__gthrw(pthread_rwlock_trywrlock)
+-__gthrw(pthread_rwlock_unlock)
++/*__gthrw(pthread_rwlock_rdlock)*/
++/*__gthrw(pthread_rwlock_tryrdlock)*/
++/*__gthrw(pthread_rwlock_wrlock)*/
++/*__gthrw(pthread_rwlock_trywrlock)*/
++/*__gthrw(pthread_rwlock_unlock)*/
+ #endif
+ 
+ #if defined(_LIBOBJC) || defined(_LIBOBJC_WEAK)
+@@ -491,12 +491,12 @@ __gthread_objc_thread_get_priority (void)
+ }
+ 
+ /* Yield our process time to another thread.  */
+-static inline void
++/*static inline void
+ __gthread_objc_thread_yield (void)
+ {
+   if (__gthread_active_p ())
+     __gthrw_(sched_yield) ();
+-}
++}*/
+ 
+ /* Terminate the current thread.  */
+ static inline int
+@@ -721,11 +721,11 @@ __gthread_detach (__gthread_t __threadid)
+   return __gthrw_(pthread_detach) (__threadid);
+ }
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_equal (__gthread_t __t1, __gthread_t __t2)
+ {
+   return __gthrw_(pthread_equal) (__t1, __t2);
+-}
++}*/
+ 
+ __GTHREAD_INLINE __gthread_t
+ __gthread_self (void)
+@@ -733,11 +733,11 @@ __gthread_self (void)
+   return __gthrw_(pthread_self) ();
+ }
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_yield (void)
+ {
+   return __gthrw_(sched_yield) ();
+-}
++}*/
+ 
+ __GTHREAD_INLINE int
+ __gthread_once (__gthread_once_t *__once, void (*__func) (void))
+@@ -838,9 +838,9 @@ __gthread_recursive_mutex_init_function (__gthread_recursive_mutex_t *__mutex)
+       int __r;
+ 
+       __r = __gthrw_(pthread_mutexattr_init) (&__attr);
+-      if (!__r)
+-	__r = __gthrw_(pthread_mutexattr_settype) (&__attr,
+-						   PTHREAD_MUTEX_RECURSIVE);
++//      if (!__r)
++//	__r = __gthrw_(pthread_mutexattr_settype) (&__attr,
++//						   PTHREAD_MUTEX_RECURSIVE);
+       if (!__r)
+ 	__r = __gthrw_(pthread_mutex_init) (__mutex, &__attr);
+       if (!__r)
+@@ -932,50 +932,50 @@ __gthread_cond_destroy (__gthread_cond_t* __cond)
+ }
+ 
+ #ifndef __cplusplus
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_rwlock_rdlock (__gthread_rwlock_t *__rwlock)
+ {
+   if (__gthread_active_p ())
+     return __gthrw_(pthread_rwlock_rdlock) (__rwlock);
+   else
+     return 0;
+-}
++}*/
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_rwlock_tryrdlock (__gthread_rwlock_t *__rwlock)
+ {
+   if (__gthread_active_p ())
+     return __gthrw_(pthread_rwlock_tryrdlock) (__rwlock);
+   else
+     return 0;
+-}
++}*/
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_rwlock_wrlock (__gthread_rwlock_t *__rwlock)
+ {
+   if (__gthread_active_p ())
+     return __gthrw_(pthread_rwlock_wrlock) (__rwlock);
+   else
+     return 0;
+-}
++}*/
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_rwlock_trywrlock (__gthread_rwlock_t *__rwlock)
+ {
+   if (__gthread_active_p ())
+     return __gthrw_(pthread_rwlock_trywrlock) (__rwlock);
+   else
+     return 0;
+-}
++}*/
+ 
+-__GTHREAD_INLINE int
++/*__GTHREAD_INLINE int
+ __gthread_rwlock_unlock (__gthread_rwlock_t *__rwlock)
+ {
+   if (__gthread_active_p ())
+     return __gthrw_(pthread_rwlock_unlock) (__rwlock);
+   else
+     return 0;
+-}
++}*/
+ #endif
+ 
+ #endif /* _LIBOBJC */
+diff --git a/libgcc/libgcov.h b/libgcc/libgcov.h
+index 1643b4440..eaa1bb499 100644
+--- a/libgcc/libgcov.h
++++ b/libgcc/libgcov.h
+@@ -46,7 +46,10 @@
+ #include "gcov.h"
+ 
+ #if HAVE_SYS_MMAN_H
++#include <sys/types.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
++#include <fcntl.h>
+ #endif
+ 
+ #if __CHAR_BIT__ == 8
+@@ -427,8 +430,14 @@ gcov_counter_add (gcov_type *counter, gcov_type value,
+ static inline void *
+ malloc_mmap (size_t length)
+ {
+-  return mmap (NULL, length, PROT_READ | PROT_WRITE,
+-	       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++  int fd = open("/dev/zero", O_RDWR);
++  if (fd < 0)
++    return MAP_FAILED;
++  void *ret = mmap (NULL, length, PROT_READ | PROT_WRITE,
++	       MAP_PRIVATE, fd, 0);
++
++  close(fd);
++  return ret;
+ }
+ 
+ #endif
+diff --git a/libgomp/config/posix/proc.c b/libgomp/config/posix/proc.c
+index 95955cc41..61c130131 100644
+--- a/libgomp/config/posix/proc.c
++++ b/libgomp/config/posix/proc.c
+@@ -38,6 +38,9 @@
+ # endif
+ #endif
+ 
++#ifdef __sgi
++#define _SC_NPROCESSORS_ONLN _SC_NPROC_ONLN
++#endif
+ 
+ /* At startup, determine the default number of threads.  It would seem
+    this should be related to the number of cpus online.  */
+diff --git a/libgomp/configure.tgt b/libgomp/configure.tgt
+index 46af75f97..a1e4a107d 100644
+--- a/libgomp/configure.tgt
++++ b/libgomp/configure.tgt
+@@ -153,6 +153,11 @@ case "${target}" in
+ 	config_path="bsd darwin posix"
+ 	;;
+ 
++  *-*-irix6*)
++	# Need to link with -lpthread so libgomp.so is self-contained.
++	XLDFLAGS="${XLDFLAGS} -lpthread"
++	;;
++
+   *-*-freebsd*)
+ 	# Need to link with -lpthread so libgomp.so is self-contained.
+ 	XLDFLAGS="${XLDFLAGS} -lpthread"

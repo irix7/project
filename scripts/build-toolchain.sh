@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 #
-# Build the baseline IRIX 6.5 cross toolchain.
+# Build the IRIX 6.5 cross toolchain.
 #
-# Reproduces the pdaxrom 15.2 IRIX cross (https://github.com/pdaxrom/irix-gcc,
-# tag 1.2) from pinned upstream sources:
+# By default this builds the GCC 16.2 IRIX port: binutils 2.20.1 from the
+# pdaxrom lineage plus the in-repo GCC 16.2 series (patches/gcc-16.2/),
+# re-derived from pdaxrom/irix-gcc tag 1.2's 15.2 IRIX diff:
 #
-#   * binutils 2.20.1 with the pdaxrom IRIX host-build patches
-#   * GCC 15.2.0 with the pdaxrom IRIX target patches
+#   * binutils 2.20.1 with the pdaxrom IRIX patches
+#   * GCC 16.2.0 with the in-repo IRIX series
 #   * the local patches/ deltas that a sysroot-less host needs
 #
+# `--gcc 15.3.0` (or 15.2.0) selects the fallback recipe: the pdaxrom
+# 15.2.0 IRIX diffs applied to that release plus the local patches. The
+# 15.3.0 path is the heuristic fallback documented in docs/toolchain.md;
+# the 15.2.0 path reproduces the original baseline tree.
+#
 # Unlike pdaxrom's own IRIX 6.5 configuration, which builds an n32-default
-# compiler for the mips-sgi-irix6n32 triplet, this baseline configures the
-# canonical mips-sgi-irix6.5 target with o32 as the default ABI (the Indy's
-# native environment, per ADR-0003). The n32-default patch is therefore not
+# compiler for the mips-sgi-irix6n32 triplet, this configures the canonical
+# mips-sgi-irix6.5 target with o32 as the default ABI (the Indy's native
+# environment, per ADR-0003). The n32-default patch is therefore not
 # applied; -mabi=32/-mabi=n32/-mabi=64 still select all three multilibs.
 #
 # No SGI or licence-restricted material is downloaded or installed; a target
@@ -25,16 +31,18 @@
 # Usage: scripts/build-toolchain.sh [options]
 #
 #   --work-dir DIR   scratch space for sources, builds and logs
-#                    (default: <repo>/.scratch/toolchain)
+#                    (default: <repo>/.scratch/toolchain-<gcc version>)
 #   --prefix DIR     installation prefix (default: <work-dir>/prefix)
 #   --jobs N         parallel make jobs (default: number of CPUs)
 #   --sysroot DIR    target sysroot; enables libstdc++ if it is set
 #   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
+#   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
 #   --clean          remove the work directory before building
 #   -h, --help       show this help
 #
-# Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX and ISL_PREFIX
-# are honoured. The nix devshell sets all of them.
+# Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX and
+# GCC_VERSION (overridden by --gcc) are honoured. The nix devshell sets the
+# first five.
 #
 set -euo pipefail
 
@@ -44,9 +52,13 @@ BINUTILS_VERSION=2.20.1
 BINUTILS_TARBALL="binutils-${BINUTILS_VERSION}.tar.bz2"
 BINUTILS_SHA256=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64
 
-GCC_VERSION=15.2.0
-GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
-GCC_SHA256=438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e
+# GCC releases this script knows how to build. The sha256 values are
+# pinned against the official GNU release checksums
+# (https://gcc.gnu.org/pub/gcc/releases/gcc-<version>/sha512.sum).
+GCC_VERSION=${GCC_VERSION:-16.2.0}
+GCC_SHA256_16_2_0=e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
+GCC_SHA256_15_3_0=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
+GCC_SHA256_15_2_0=438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e
 
 # pdaxrom/irix-gcc tag 1.2 (main), the 15.2.0 IRIX port.
 PDAXROM_COMMIT=2aa3421b4b4b9f8962cdd864243d82d7a458fcff
@@ -57,7 +69,7 @@ BINUTILS_PATCHES=(
   "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
   "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
 )
-GCC_PATCHES=(
+GCC_15X_PATCHES=(
   "gcc-15.2.0-irix.diff:e5a4af77312218ce7b878928d8840de564cae2d874c58bcb98ef21eacb1e99bb"
   "gcc-15.2.0-irix65-abi64.diff:38b0a8acee2dadc813527a88d3247892079e29e5f58a9c5e98837e032975c0f6"
   "gcc-15.2.0-irix65-stdc++.diff:93dd8a84bb9e2a987b7cce1a800e8aa7227eb202d481b5bef9afcf58af989d4b"
@@ -66,13 +78,18 @@ GCC_PATCHES=(
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-# Local deltas against the pdaxrom series, shipped in this repository.
+# The in-repo GCC 16.2 series; see patches/gcc-16.2/series and docs/toolchain.md.
+GCC_SERIES_DIR=${REPO_ROOT}/patches/gcc-16.2
+
+# Local deltas against the pdaxrom series, shipped in this repository. They
+# are folded into the 16.2 series (which omits LIMITS_H_TEST altogether) and
+# remain here for the 15.x fallback recipe.
 LOCAL_GCC_PATCHES=(
   "${REPO_ROOT}/patches/0001-t-iris-conditional-limits-h.patch"
   "${REPO_ROOT}/patches/0002-t-iris6-conditional-limits-h.patch"
 )
 
-WORK_DIR=${WORK_DIR:-${REPO_ROOT}/.scratch/toolchain}
+WORK_DIR=${WORK_DIR:-}
 PREFIX=${PREFIX:-}
 JOBS=${JOBS:-$( (nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1) )}
 IRIX_SYSROOT=${IRIX_SYSROOT:-}
@@ -81,23 +98,26 @@ CLEAN=0
 
 usage() {
 	cat <<'EOF'
-Build the baseline IRIX 6.5 cross toolchain (binutils 2.20.1 + GCC 15.2.0)
-from the pdaxrom 15.2 IRIX recipe, targeting mips-sgi-irix6.5 with big-endian
-o32, n32 and n64 multilibs.
+Build the IRIX 6.5 cross toolchain (binutils 2.20.1 + GCC 16.2.0 by
+default) targeting mips-sgi-irix6.5 with big-endian o32, n32 and n64
+multilibs. The gcc-16.2 IRIX series is in-repo; --gcc selects the 15.3.0
+or 15.2.0 pdaxrom fallback recipe.
 
 Usage: scripts/build-toolchain.sh [options]
 
   --work-dir DIR   scratch space for sources, builds and logs
-                   (default: <repo>/.scratch/toolchain)
+                   (default: <repo>/.scratch/toolchain-<gcc version>)
   --prefix DIR     installation prefix (default: <work-dir>/prefix)
   --jobs N         parallel make jobs (default: number of CPUs)
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
+  --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
   --clean          remove the work directory before building
   -h, --help       show this help
 
-Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX and ISL_PREFIX
-are honoured. The nix devshell sets all of them.
+Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX and
+GCC_VERSION (overridden by --gcc) are honoured. The nix devshell sets the
+first five.
 EOF
 }
 
@@ -117,11 +137,34 @@ while [ $# -gt 0 ]; do
 		--jobs) JOBS=$2; shift 2 ;;
 		--sysroot) IRIX_SYSROOT=$2; shift 2 ;;
 		--languages) LANGUAGES=$2; shift 2 ;;
+		--gcc) GCC_VERSION=$2; shift 2 ;;
 		--clean) CLEAN=1; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "unknown option: $1 (try --help)" ;;
 	esac
 done
+
+# Resolve the GCC recipe: 16.2.0 is the in-repo series, 15.3.0 and 15.2.0
+# use the pdaxrom 15.2.0 diffs.
+case "$GCC_VERSION" in
+	16.2.0)
+		GCC_SHA256=$GCC_SHA256_16_2_0
+		GCC_RECIPE=series
+		;;
+	15.3.0)
+		GCC_SHA256=$GCC_SHA256_15_3_0
+		GCC_RECIPE=pdaxrom
+		;;
+	15.2.0)
+		GCC_SHA256=$GCC_SHA256_15_2_0
+		GCC_RECIPE=pdaxrom
+		;;
+	*)
+		die "unsupported GCC version: ${GCC_VERSION} (known: 16.2.0, 15.3.0, 15.2.0)"
+		;;
+esac
+GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
+WORK_DIR=${WORK_DIR:-${REPO_ROOT}/.scratch/toolchain-${GCC_VERSION}}
 
 if [ "$CLEAN" -eq 1 ]; then
 	rm -rf "$WORK_DIR"
@@ -215,6 +258,23 @@ apply_patches() {
 			die "${name} did not apply cleanly"
 		fi
 	done
+}
+
+# apply_series SRCDIR SERIES-FILE: apply the patches named by the manifest,
+# in order, via apply_patches.
+apply_series() {
+	local dir=$1 series=$2
+	local p list=()
+	while IFS= read -r p; do
+		case "$p" in
+			''|'#'*) continue ;;
+		esac
+		p="${series%/*}/${p}"
+		[ -f "$p" ] || die "series entry not found: ${p}"
+		list+=("$p")
+	done < "$series"
+	[ "${#list[@]}" -gt 0 ] || die "empty series: ${series}"
+	apply_patches "$dir" "${list[@]}"
 }
 
 # configure_and_make SRCDIR BUILDDIR LOG CONFIGURE-ARGS...
@@ -339,20 +399,24 @@ build_gcc() {
 		"${extra[@]}"
 	)
 
-	local stamp=${STAMPS}/gcc.installed
+	local stamp=${STAMPS}/gcc-${GCC_VERSION}.installed
 	if [ -f "$stamp" ] && [ -x "${PREFIX}/bin/${TARGET}-gcc" ] &&
 		[ "$(cat "${stamp}.options" 2>/dev/null || true)" = "${args[*]}" ]; then
 		note "GCC ${GCC_VERSION} already installed"
 		return 0
 	fi
 
-	note "GCC ${GCC_VERSION} (${LANGUAGES})"
+	note "GCC ${GCC_VERSION} (${LANGUAGES}, ${GCC_RECIPE} recipe)"
 	fetch "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/${GCC_TARBALL}" \
 		"${DOWNLOADS}/${GCC_TARBALL}" "$GCC_SHA256"
-	fetch_patches "${GCC_PATCHES[@]}"
 	extract "${DOWNLOADS}/${GCC_TARBALL}" "gcc-${GCC_VERSION}"
 	local src="${SRC_DIR}/gcc-${GCC_VERSION}"
-	apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
+	if [ "$GCC_RECIPE" = series ]; then
+		apply_series "$src" "${GCC_SERIES_DIR}/series"
+	else
+		fetch_patches "${GCC_15X_PATCHES[@]}"
+		apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
+	fi
 
 	# The just-built binutils must win over any host as/ld.
 	export PATH="${PREFIX}/bin:${PATH}"
@@ -367,8 +431,9 @@ build_gcc() {
 
 # -------------------------------------------------------------------------- --
 
-note "Baseline IRIX 6.5 cross toolchain"
+note "IRIX 6.5 cross toolchain"
 echo "    target:   ${TARGET}"
+echo "    gcc:      ${GCC_VERSION} (${GCC_RECIPE} recipe)"
 echo "    work dir: ${WORK_DIR}"
 echo "    prefix:   ${PREFIX}"
 echo "    jobs:     ${JOBS}"
@@ -378,7 +443,8 @@ build_binutils
 build_gcc
 
 note "Verifying the toolchain"
-"${SCRIPT_DIR}/verify-toolchain.sh" --prefix "$PREFIX"
+"${SCRIPT_DIR}/verify-toolchain.sh" --prefix "$PREFIX" \
+	--gcc-version "$GCC_VERSION"
 
 note "Done"
 echo "    prefix: ${PREFIX}"

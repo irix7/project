@@ -1,5 +1,5 @@
 {
-  description = "Baseline IRIX 6.5 cross toolchain (pdaxrom 15.2 lineage)";
+  description = "IRIX 6.5 cross toolchain (GCC 16.2 IRIX series, pdaxrom lineage)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -61,7 +61,7 @@
         {
           inherit hostTools env;
           build = pkgs.writeShellApplication {
-            name = "irix-toolchain-baseline";
+            name = "irix-toolchain";
             runtimeInputs = hostTools;
             text = ''
               export CC=${env.CC}
@@ -72,7 +72,7 @@
               export ISL_PREFIX=${env.ISL_PREFIX}
               export SSL_CERT_FILE=${env.SSL_CERT_FILE}
               exec ${pkgs.bash}/bin/bash ${self}/scripts/build-toolchain.sh \
-                --work-dir "$PWD/.scratch/toolchain" "$@"
+                --work-dir "$PWD/.scratch/toolchain-16.2" "$@"
             '';
           };
         };
@@ -107,7 +107,7 @@
               SSL_CERT_FILE;
 
             shellHook = ''
-              echo "IRIX 6.5 cross-toolchain baseline devshell"
+              echo "IRIX 6.5 cross-toolchain devshell"
               echo "Build the toolchain with: scripts/build-toolchain.sh"
             '';
           };
@@ -135,7 +135,7 @@
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";
-          program = "${(mkEnv pkgs).build}/bin/irix-toolchain-baseline";
+          program = "${(mkEnv pkgs).build}/bin/irix-toolchain";
         };
       });
     };

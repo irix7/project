@@ -1,0 +1,106 @@
+IRIX configure changes for the gcc directory
+
+Disable fixed-point on native IRIX hosts, accept --enable-threads=irix,
+and force HAVE_AS_TLS off for IRIX targets: IRIX 6.5's rld and libc.so
+have no TLS support, so even a GNU as/ld with TLS must not make GCC emit
+TLS sequences.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
+Rebase notes: upstream 16.2 inserted a Windows @secrel32 TLS check
+between the assembler probe and the HAVE_AS_TLS define; the re-derived
+hunk sits after it. The pdaxrom hunk also copied an *-*-osf* TLS case
+from historic GCC; alpha-dec-osf support was removed from 16.2 and is
+irrelevant to this series, so the re-derivation keeps only the IRIX
+case. The generated gcc/configure is patched in step rather than
+regenerated; the two pdaxrom hunks that only shift libtool #line numbers
+were dropped as autotools churn.
+
+diff --git a/gcc/configure b/gcc/configure
+index 4a90e86ed..b95091350 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -8052,7 +8052,16 @@ else
+       ;;
+ 
+     mips*-*-*)
+-      enable_fixed_point=yes
++      case $host in
++	mips*-sgi-irix*)
++	  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: fixed-point is not supported on IRIX" >&5
++$as_echo "$as_me: WARNING: fixed-point is not supported on IRIX" >&2;}
++	  enable_fixed_point=no
++	  ;;
++	*)
++	  enable_fixed_point=yes
++	  ;;
++      esac
+       ;;
+     loongarch*-*-*)
+       enable_fixed_point=yes
+@@ -13219,7 +13228,7 @@ case ${enable_threads} in
+     # default
+     target_thread_file='single'
+     ;;
+-  aix | dce | lynx | mipssde | posix | rtems | \
++  aix | dce | irix | lynx | mipssde | posix | rtems | \
+   single | tpf | vxworks | win32 | mcf)
+     target_thread_file=${enable_threads}
+     ;;
+@@ -28464,6 +28473,13 @@ case $target_os in
+     fi
+     ;;
+ esac
++case "$target" in
++  *-*-irix6*|*-*-irix5*)
++    # IRIX 6.5 rld and libc.so lack TLS support, so even if gas and gld
++    # with TLS support are in use, native TLS cannot work.
++    set_have_as_tls=no
++    ;;
++esac
+ if test $set_have_as_tls = yes ; then
+ 
+ $as_echo "#define HAVE_AS_TLS 1" >>confdefs.h
+diff --git a/gcc/configure.ac b/gcc/configure.ac
+index abf5e4f4e..457cb6984 100644
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -971,7 +971,15 @@ AC_ARG_ENABLE(fixed-point,
+       ;;
+ 
+     mips*-*-*)
+-      enable_fixed_point=yes
++      case $host in
++	mips*-sgi-irix*)
++	  AC_MSG_WARN(fixed-point is not supported on IRIX, ignored)
++	  enable_fixed_point=no
++	  ;;
++	*)
++	  enable_fixed_point=yes
++	  ;;
++      esac
+       ;;
+     loongarch*-*-*)
+       enable_fixed_point=yes
+@@ -2109,7 +2117,7 @@ case ${enable_threads} in
+     # default
+     target_thread_file='single'
+     ;;
+-  aix | dce | lynx | mipssde | posix | rtems | \
++  aix | dce | irix | lynx | mipssde | posix | rtems | \
+   single | tpf | vxworks | win32 | mcf)
+     target_thread_file=${enable_threads}
+     ;;
+@@ -4330,6 +4338,13 @@ case $target_os in
+     fi
+     ;;
+ esac
++case "$target" in
++  *-*-irix6*|*-*-irix5*)
++    # IRIX 6.5 rld and libc.so lack TLS support, so even if gas and gld
++    # with TLS support are in use, native TLS cannot work.
++    set_have_as_tls=no
++    ;;
++esac
+ if test $set_have_as_tls = yes ; then
+   AC_DEFINE(HAVE_AS_TLS, 1,
+ 	    [Define if your assembler and linker support thread-local storage.])

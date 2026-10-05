@@ -1,0 +1,43 @@
+Guard GCC's stdint types against IRIX <inttypes.h>
+
+IRIX 6.5's <inttypes.h> defines the same integer types as GCC's stdint.h
+wrapper; gate the duplicate typedefs on __inttypes_INCLUDED and set it
+afterwards. Without this, translation units that include both headers
+fail with redefinitions.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b),
+gcc-15.2.0-irix65-abi64.diff.
+
+diff --git a/gcc/ginclude/stdint-gcc.h b/gcc/ginclude/stdint-gcc.h
+index 1f9b8c845..f4444bd37 100644
+--- a/gcc/ginclude/stdint-gcc.h
++++ b/gcc/ginclude/stdint-gcc.h
+@@ -30,6 +30,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+ 
+ /* 7.8.1.1 Exact-width integer types */
+ 
++#ifndef __inttypes_INCLUDED
+ #ifdef __INT8_TYPE__
+ typedef __INT8_TYPE__ int8_t;
+ #endif
+@@ -54,6 +55,7 @@ typedef __UINT32_TYPE__ uint32_t;
+ #ifdef __UINT64_TYPE__
+ typedef __UINT64_TYPE__ uint64_t;
+ #endif
++#endif
+ 
+ /* 7.8.1.2 Minimum-width integer types */
+ 
+@@ -88,8 +90,12 @@ typedef __UINTPTR_TYPE__ uintptr_t;
+ 
+ /* 7.8.1.5 Greatest-width integer types */
+ 
++#ifndef __inttypes_INCLUDED
+ typedef __INTMAX_TYPE__ intmax_t;
+ typedef __UINTMAX_TYPE__ uintmax_t;
++#endif
++
++#define __inttypes_INCLUDED
+ 
+ #if (!defined __cplusplus || __cplusplus >= 201103L \
+      || defined __STDC_LIMIT_MACROS)

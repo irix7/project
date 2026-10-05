@@ -1,0 +1,174 @@
+IRIX MIPS codegen and bootstrap adjustments
+
+mips.cc: make IRIX's va_list a plain char *, do not emit the .mdebug.abi
+section that the native ld warns about, emit the o32 .globl name .text
+directive for undefined functions so the linker cannot skip necessary
+$gp setup, keep common objects non-local for the native ld, guard
+ASM_OUTPUT_TYPE_DIRECTIVE, and mark o32 functions written so
+mips_file_end does not treat them as external. The R4000 fp_add cost
+change is the pdaxrom tuning tweak.
+
+dwarf2cfi.cc: save the return-address register into
+DWARF_FRAME_RETURN_COLUMN when the IRIX layout moves it, which the
+IRIX 6 host bootstrap needs. varasm.cc relaxes two assertions that IRIX
+assembly paths trip.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
+All hunks applied to 16.2 with offsets only; no re-derivation was needed.
+
+diff --git a/gcc/config/mips/mips.cc b/gcc/config/mips/mips.cc
+index cc45a195b..5fd43295d 100644
+--- a/gcc/config/mips/mips.cc
++++ b/gcc/config/mips/mips.cc
+@@ -916,7 +916,7 @@ static const struct mips_rtx_cost_data
+ 		     6            /* memory_latency */
+   },
+   { /* R4000 */
+-     COSTS_N_INSNS (6),           /* fp_add */
++     COSTS_N_INSNS (4),           /* fp_add */
+      COSTS_N_INSNS (7),           /* fp_mult_sf */
+      COSTS_N_INSNS (8),           /* fp_mult_df */
+      COSTS_N_INSNS (23),          /* fp_div_sf */
+@@ -7116,6 +7116,9 @@ mips_build_builtin_va_list (void)
+       layout_type (record);
+       return record;
+     }
++  else if (TARGET_IRIX && TARGET_IRIX6)
++    /* On IRIX 6, this type is 'char *'.  */
++    return build_pointer_type (char_type_node);
+   else
+     /* Otherwise, we use 'void *'.  */
+     return ptr_type_node;
+@@ -7516,7 +7519,9 @@ mips_start_function_definition (const char *name, bool mips16_p,
+       fputs ("\n", asm_out_file);
+     }
+ 
++#ifdef ASM_OUTPUT_TYPE_DIRECTIVE
+   ASM_OUTPUT_TYPE_DIRECTIVE (asm_out_file, name, "function");
++#endif
+ 
+   /* Start the definition proper.  */
+   ASM_OUTPUT_FUNCTION_LABEL (asm_out_file, name, decl);
+@@ -9913,6 +9918,19 @@ mips_output_external (FILE *file, tree decl, const char *name)
+ 	  fprintf (file, ", " HOST_WIDE_INT_PRINT_DEC "\n",
+ 		   int_size_in_bytes (TREE_TYPE (decl)));
+ 	}
++      else if (TARGET_IRIX
++	       && mips_abi == ABI_32
++	       && TREE_CODE (decl) == FUNCTION_DECL)
++	{
++	  /* In IRIX 5 or IRIX 6 for the O32 ABI, we must output a
++	     `.global name .text' directive for every used but
++	     undefined function.  If we don't, the linker may perform
++	     an optimization (skipping over the insns that set $gp)
++	     when it is unsafe.  */
++	  fputs ("\t.globl ", file);
++	  assemble_name (file, name);
++	  fputs (" .text\n", file);
++	}
+     }
+ }
+ 
+@@ -10191,7 +10209,7 @@ mips_output_aligned_decl_common (FILE *stream, tree decl, const char *name,
+     }
+   else
+     mips_declare_common_object (stream, name, "\n\t.comm\t",
+-				size, align, true);
++				size, align, false);
+ }
+ 
+ #ifdef ASM_OUTPUT_SIZE_DIRECTIVE
+@@ -10313,6 +10331,11 @@ mips_file_start (void)
+ {
+   default_file_start ();
+ 
++  /* Generate a special section to describe the ABI switches used to
++     produce the resultant binary.  This is unnecessary on IRIX and
++     causes unwanted warnings from the native linker.  */
++  if (!TARGET_IRIX)
++    {
+   /* Generate a special section to describe the ABI switches used to
+      produce the resultant binary.  */
+ 
+@@ -10321,16 +10344,18 @@ mips_file_start (void)
+      information in order to correctly debug binaries produced by
+      older binutils.  See the function mips_gdbarch_init in
+      gdb/mips-tdep.c.  */
+-  fprintf (asm_out_file, "\t.section .mdebug.%s\n\t.previous\n",
+-	   mips_mdebug_abi_name ());
++/*  fprintf (asm_out_file, "\t.section .mdebug.%s\n\t.previous\n",
++	   mips_mdebug_abi_name ()); */
+ 
+   /* There is no ELF header flag to distinguish long32 forms of the
+      EABI from long64 forms.  Emit a special section to help tools
+      such as GDB.  Do the same for o64, which is sometimes used with
+      -mlong64.  */
+-  if (mips_abi == ABI_EABI || mips_abi == ABI_O64)
++/*  if (mips_abi == ABI_EABI || mips_abi == ABI_O64)
+     fprintf (asm_out_file, "\t.section .gcc_compiled_long%d\n"
+-	     "\t.previous\n", TARGET_LONG64 ? 64 : 32);
++	     "\t.previous\n", TARGET_LONG64 ? 64 : 32); */
++
++    }
+ 
+   /* Record the NaN encoding.  */
+   if (HAVE_AS_NAN || mips_nan != MIPS_IEEE_754_DEFAULT)
+@@ -12272,6 +12297,10 @@ mips_output_function_prologue (FILE *file)
+   fnname = XSTR (XEXP (DECL_RTL (current_function_decl), 0), 0);
+   mips_start_function_definition (fnname, TARGET_MIPS16, current_function_decl);
+ 
++  /* Stop mips_file_end from treating this function as external.  */
++  if (TARGET_IRIX && mips_abi == ABI_32)
++    TREE_ASM_WRITTEN (DECL_NAME (cfun->decl)) = 1;
++
+   /* Output MIPS-specific frame information.  */
+   if (!flag_inhibit_size_directive)
+     {
+diff --git a/gcc/dwarf2cfi.cc b/gcc/dwarf2cfi.cc
+index f2ffaa8ad..70d395a3b 100644
+--- a/gcc/dwarf2cfi.cc
++++ b/gcc/dwarf2cfi.cc
+@@ -1521,6 +1521,10 @@ dwarf2out_frame_debug_cfa_restore (rtx reg, bool emit_cfi)
+       if (emit_cfi)
+ 	add_cfi_restore (regno);
+       update_row_reg_save (cur_row, regno, NULL);
++      if (REG_P (INCOMING_RETURN_ADDR_RTX) // Bootstrap fix
++	  && regno == dwf_regno (INCOMING_RETURN_ADDR_RTX)
++	  && regno != DWARF_FRAME_RETURN_COLUMN)
++	 reg_save (DWARF_FRAME_RETURN_COLUMN, dwf_cfa_reg(reg), NULL);
+     }
+   else
+     {
+@@ -1537,6 +1541,10 @@ dwarf2out_frame_debug_cfa_restore (rtx reg, bool emit_cfi)
+ 	  if (emit_cfi)
+ 	    add_cfi_restore (regno);
+ 	  update_row_reg_save (cur_row, regno, NULL);
++	  if (REG_P (INCOMING_RETURN_ADDR_RTX) // Bootstrap fix
++	     && regno == dwf_regno (INCOMING_RETURN_ADDR_RTX)
++	     && regno != DWARF_FRAME_RETURN_COLUMN)
++	    reg_save (DWARF_FRAME_RETURN_COLUMN, dwf_cfa_reg(reg), NULL);
+ 	}
+     }
+ }
+diff --git a/gcc/varasm.cc b/gcc/varasm.cc
+index 5999f1e54..1c89c071e 100644
+--- a/gcc/varasm.cc
++++ b/gcc/varasm.cc
+@@ -3190,7 +3190,7 @@ assemble_integer (rtx x, unsigned int size, unsigned int align, int force)
+       gcc_assert (!i);
+     }
+ 
+-  gcc_assert (!force);
++/*  gcc_assert (!force); */
+ 
+   return false;
+ }
+@@ -7193,7 +7193,7 @@ default_no_named_section (const char *name ATTRIBUTE_UNUSED,
+ {
+   /* Some object formats don't support named sections at all.  The
+      front-end should already have flagged this as an error.  */
+-  gcc_unreachable ();
++  /* gcc_unreachable (); */
+ }
+ 
+ #ifndef TLS_SECTION_ASM_FLAG

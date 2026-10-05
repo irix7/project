@@ -2,10 +2,10 @@
 
 `scripts/smoke.sh` is the project's primary testing seam (CONTEXT.md). One
 command takes a C source and the exact stdout it must produce, compiles and
-links it with the baseline cross, ships the binary to the guest with iris-ci,
-runs it there and diffs the guest's stdout against the expected file. Later
-toolchain milestones test themselves through it; the case data lives beside
-it (`scripts/smoke/`), not inside it.
+links it with the cross under test, ships the binary to the guest with
+iris-ci, runs it there and diffs the guest's stdout against the expected
+file. Later toolchain milestones test themselves through it; the case data
+lives beside it (`scripts/smoke/`), not inside it.
 
 ## Invocation
 
@@ -30,8 +30,10 @@ sqrt(2) = 1.414214
 
 `hello.expected` is byte-for-byte the oracle's recorded o32 output. `--abi`
 defaults to o32, the Indy's native environment (ADR-0003), and is mapped to
-`-mabi=32|n32|64`. n64 links but does not execute on the IP22/R4400, so it
-exists here for the n64 static-compare target (#20), not as a runnable case.
+`-mabi=32|n32|64`. n64 cannot execute on the IP22/R4400 and the current
+capture cannot link it either (no `/usr/lib64/mips4/crt1.o` or n64 libc,
+issue #20), so it exists here for the n64 static-compare target, not as a
+runnable case.
 `--cflags` is word-split and passed to both the compile and the link step, so
 `-O2`, `-lm` and `-pthread` need no script change. `--timeout` bounds each
 iris-ci call (default 300 seconds).
@@ -47,14 +49,23 @@ of this seam. That proof belongs to the rebuilt runtime (#9), not here.
 
 The cross must be configured against the captured sysroot, so the harness
 defaults `--sysroot` to the path the compiler prints with `-print-sysroot` and
-refuses an empty tree or one without `usr/include`. The rebuild used for
-issue #5 was:
+refuses an empty tree or one without `usr/include`. The current (GCC 16.2)
+rebuild is:
 
 ```sh
 nix develop --command bash -c \
-	'scripts/build-toolchain.sh --sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot --languages c'
-scripts/verify-toolchain.sh --prefix .scratch/toolchain/prefix
+	'scripts/build-toolchain.sh --work-dir .scratch/toolchain-16.2 \
+		--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot --languages c'
+scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2/prefix \
+	--gcc-version 16.2.0
 ```
+
+That recipe is issue #6; the series layout and provenance are in
+`docs/toolchain.md`. smoke.sh defaults `--prefix` to
+`.scratch/toolchain-16.2/prefix`, the cross under test. The original 15.2
+baseline at `.scratch/toolchain/prefix` stays reproducible with
+`--gcc 15.2.0 --work-dir .scratch/toolchain` and can still be exercised with
+`smoke.sh --prefix .scratch/toolchain/prefix`.
 
 `--languages c` is deliberate: C is all this seam needs and libstdc++ is not a
 deliverable, so the rebuild stays quick. A sysroot-less cross still compiles

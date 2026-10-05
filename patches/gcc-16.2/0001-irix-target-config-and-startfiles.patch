@@ -1,0 +1,333 @@
+IRIX target restoration: config, multilibs and startfiles
+
+Bring back the mips-sgi-irix[56]* target that upstream GCC removed after
+4.8: the config.gcc stanza, the IRIX 6 multilib fragment with big-endian
+o32, n32 and n64 (all three from day one, ADR-0003), the o32 default and
+MIPS II/III/IV ISA defaults per ABI, and the libgcc irix-crti.o and
+irix-crtn.o startfiles.
+
+The IRIX crt fragments differ from the generic MIPS ones because the SGI
+linker's -init/-fini handling requires GCC's init and fini prologues in
+separate .gcc_init/.gcc_fini sections rather than in .init/.fini.
+
+The pdaxrom fragments hardcode LIMITS_H_TEST = true, forcing an
+#include_next of the target's limits.h even when no sysroot exists, which
+breaks headerless configure probes. This repository carried two local
+patches removing it
+(patches/0001-t-iris-conditional-limits-h.patch and
+patches/0002-t-iris6-conditional-limits-h.patch); the series folds them
+in by omitting the assignment, so GCC's default conditional test applies.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff;
+the n32/64/32 multilib set in t-iris6 is from
+gcc-15.2.0-irix65-abi64.diff. The LIMITS_H_TEST omission is original to
+this repository. Upstream 16.2 still ships gcc/config/mips/t-irix6 with
+n32/n64 only; the series deletes it in favour of the pdaxrom t-iris6, as
+the 15.2 baseline did.
+
+Rebase note: config.gcc passes mips/t-slibgcc-irix in tmake_file, which
+does not exist in 16.2. GCC's configure silently skips missing tmake
+files, exactly as on 15.2, so the reference is carried unchanged.
+
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+index 743421768..0c1cf95b6 100644
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -2682,6 +2682,50 @@ loongarch*-*-elf*)
+ 	gcc_cv_initfini_array=yes
+ 	;;
+ 
++mips-sgi-irix[56]*)
++	tm_file="elfos.h ${tm_file} mips/iris.h"
++	tmake_file="mips/t-iris mips/t-slibgcc-irix"
++	target_cpu_default="MASK_ABICALLS"
++	case ${target} in
++	*-*-irix5*)
++		tm_file="${tm_file} mips/iris5.h"
++		use_gcc_stdint=provide
++		;;
++
++	*-*-irix6*)
++		tm_file="${tm_file} mips/iris6.h"
++		tmake_file="${tmake_file} mips/t-iris6"
++		case ${target} in
++		*-*-irix6*o32 | *-*-irix6*n32)
++			tm_defines="${tm_defines} MIPS_ISA_DEFAULT=2 MIPS_ABI_DEFAULT=ABI_32"
++			use_gcc_stdint=provide
++			;;
++		*-*-irix6.[0-4]*)
++			tm_defines="${tm_defines} MIPS_ISA_DEFAULT=3 MIPS_ABI_DEFAULT=ABI_N32"
++			use_gcc_stdint=provide
++			;;
++		*-*-irix6.5*)
++			tm_defines="${tm_defines} MIPS_ISA_DEFAULT=3 MIPS_ABI_DEFAULT=ABI_N32"
++			# Only IRIX Development Foundation 1.3 for IRIX 6.5
++			# provides stdint.h.
++			use_gcc_stdint=wrap
++			;;
++		esac
++		;;
++	esac
++	if test "x$stabs" = xyes
++	then
++		tm_file="${tm_file} dbx.h"
++	fi
++	if test "x$gnu_ld" = xyes
++	then
++		tm_defines="${tm_defines} IRIX_USING_GNU_LD"
++	fi
++	case ${enable_threads}:${have_pthread_h} in
++	  "":yes | yes:yes ) thread_file=posix ;;
++	esac
++	;;
++
+ mips*-*-netbsd*)			# NetBSD/mips, either endian.
+ 	target_cpu_default="MASK_ABICALLS"
+ 	tm_file="elfos.h ${tm_file} mips/elf.h ${nbsd_tm_file} mips/netbsd.h"
+diff --git a/gcc/config/mips/t-iris b/gcc/config/mips/t-iris
+new file mode 100644
+index 000000000..d584e1d72
+--- /dev/null
++++ b/gcc/config/mips/t-iris
+@@ -0,0 +1,13 @@
++$(T)irix-crti.o: $(srcdir)/config/mips/irix-crti.asm $(GCC_PASSES)
++	$(GCC_FOR_TARGET) $(GCC_CFLAGS) $(MULTILIB_CFLAGS) $(INCLUDES) \
++	-c -o $@ -x assembler-with-cpp $<
++
++$(T)irix-crtn.o: $(srcdir)/config/mips/irix-crtn.asm $(GCC_PASSES)
++	$(GCC_FOR_TARGET) $(GCC_CFLAGS) $(MULTILIB_CFLAGS) $(INCLUDES) \
++	-c -o $@ -x assembler-with-cpp $<
++
++#undef  STARTFILE_SPEC
++#define STARTFILE_SPEC "irix-crti.asm crtbegin.s"
++
++#undef  ENDFILE_SPEC
++#define ENDFILE_SPEC "crtend.s irix-crtn.asm"
+diff --git a/gcc/config/mips/t-iris6 b/gcc/config/mips/t-iris6
+new file mode 100644
+index 000000000..98efbd066
+--- /dev/null
++++ b/gcc/config/mips/t-iris6
+@@ -0,0 +1,38 @@
++# Copyright (C) 1995, 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
++# 2006 Free Software Foundation, Inc.
++#
++# This file is part of GCC.
++#
++# GCC is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3, or (at your option)
++# any later version.
++#
++# GCC is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with GCC; see the file COPYING3.  If not see
++# <http://www.gnu.org/licenses/>.
++
++MULTILIB_OPTIONS=mabi=n32/mabi=64/mabi=32
++MULTILIB_DIRNAMES=n32 64 32
++MULTILIB_MATCHES=
++MULTILIB_OSDIRNAMES=../lib32 ../lib64 ../lib
++
++LIBGCC = stmp-multilib
++INSTALL_LIBGCC = install-multilib
++
++TPBIT = tp-bit.c
++
++tp-bit.c: $(srcdir)/config/fp-bit.c
++	echo '#ifdef __MIPSEL__' > tp-bit.c
++	echo '# define FLOAT_BIT_ORDER_MISMATCH' >> tp-bit.c
++	echo '#endif' >> tp-bit.c
++	echo '#define QUIET_NAN_NEGATED' >> tp-bit.c
++	echo '#if __LDBL_MANT_DIG__ == 106' >> tp-bit.c
++	echo '# define TFLOAT' >> tp-bit.c
++	cat $(srcdir)/config/fp-bit.c >> tp-bit.c
++	echo '#endif' >> tp-bit.c
+diff --git a/gcc/config/mips/t-irix6 b/gcc/config/mips/t-irix6
+deleted file mode 100644
+index 6c76a4ad9..000000000
+--- a/gcc/config/mips/t-irix6
++++ /dev/null
+@@ -1,4 +0,0 @@
+-MULTILIB_OPTIONS=mabi=n32/mabi=64
+-MULTILIB_DIRNAMES=n32 64
+-MULTILIB_MATCHES=
+-MULTILIB_OSDIRNAMES=../lib32 ../lib64
+diff --git a/libgcc/Makefile.in b/libgcc/Makefile.in
+index 8b8fe6e9a..d40b00a0b 100644
+--- a/libgcc/Makefile.in
++++ b/libgcc/Makefile.in
+@@ -1099,6 +1099,12 @@ crti$(objext): $(srcdir)/config/$(cpu_type)/crti.S
+ 
+ crtn$(objext): $(srcdir)/config/$(cpu_type)/crtn.S
+ 	$(crt_compile) -c -x assembler-with-cpp $<
++
++irix-crti$(objext): $(srcdir)/config/$(cpu_type)/irix-crti.asm
++	$(crt_compile) -c -x assembler-with-cpp $<
++
++irix-crtn$(objext): $(srcdir)/config/$(cpu_type)/irix-crtn.asm
++	$(crt_compile) -c -x assembler-with-cpp $<
+ endif
+ 
+ # Build extra startfiles in the libgcc directory.
+diff --git a/libgcc/config.host b/libgcc/config.host
+index ac10ccc43..e52263bc2 100644
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -1059,6 +1059,9 @@ microblaze*-*-rtems*)
+ 	tmake_file="${tmake_file} microblaze/t-microblaze t-fdpbit"
+ 	extra_parts="$extra_parts crtbeginS.o crtendS.o crtbeginT.o crti.o crtn.o"
+ 	;;
++mips-sgi-irix[56]*)
++	extra_parts="irix-crti.o irix-crtn.o crtbegin.o crtend.o"
++	;;
+ mips*-*-netbsd*)			# NetBSD/mips, either endian.
+ 	;;
+ mips*-*-linux*)				# Linux MIPS, either endian.
+diff --git a/libgcc/config/mips/irix-crti.asm b/libgcc/config/mips/irix-crti.asm
+new file mode 100644
+index 000000000..0e52e6194
+--- /dev/null
++++ b/libgcc/config/mips/irix-crti.asm
+@@ -0,0 +1,81 @@
++/* Copyright (C) 2004, 2008 Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify it under
++the terms of the GNU General Public License as published by the Free
++Software Foundation; either version 3, or (at your option) any later
++version.
++
++GCC is distributed in the hope that it will be useful, but WITHOUT ANY
++WARRANTY; without even the implied warranty of MERCHANTABILITY or
++FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++	.abicalls
++	.set	noreorder
++	.set	nomacro
++
++/* The GNU and SGI linkers differ in their implementation of -init and -fini.
++   With the GNU linker, there can only be a single -init option, and the
++   linker simply sets DT_INIT to that value.  gcc's initialization and
++   finalization code can go directly in .init, with the prologue and
++   epilogue of the main initialization routine being provided by external
++   object files (*crti.o and *crtn.o in this case).
++
++   The SGI linker instead accepts several -init options.  It will set DT_INIT
++   to a linker-created function (placed in .init) that calls each of the -init
++   functions in turn.  If there is any user code in .init, this linker-created
++   function will be placed after it.  Note that such user code is not treated
++   specially; it will only be called if the -init options arrange for it to
++   be called.
++
++   In theory, the SGI model should allow the crti, crtn and intermediate code
++   to go in .init, just like it can with the GNU linker.  However, doing this
++   seems to confuse the linker and triggers an internal error:
++
++      ld32: FATAL   2  : Internal: at ../../ld/mips_code.c mips_code_fixup()
++	 text section overflow!
++
++   (seen with MIPSpro 7.30).  We therefore put everything in a special
++   .gcc_init section instead.  */
++
++	.section .gcc_init,"ax",@progbits
++	.globl	__gcc_init
++__gcc_init:
++#if _MIPS_SIM == _ABIO32
++	addiu	$sp,$sp,-16
++	sw	$31,0($sp)
++#else
++	daddiu	$sp,$sp,-16
++	sd	$31,0($sp)
++	sd	$28,8($sp)
++#endif
++
++	.section .gcc_fini,"ax",@progbits
++	.globl	__gcc_fini
++__gcc_fini:
++#if _MIPS_SIM == _ABIO32
++	addiu	$sp,$sp,-16
++	sw	$31,0($sp)
++#else
++	daddiu	$sp,$sp,-16
++	sd	$31,0($sp)
++	sd	$28,8($sp)
++#endif
++
++/* This object will typically be included in the final link for both
++   shared libraries and executable, and we need to hide the symbols to
++   prevent possible symbol preemption warnings from the SGI linker.  */
++.hidden __gcc_init
++.hidden __gcc_fini
++
+diff --git a/libgcc/config/mips/irix-crtn.asm b/libgcc/config/mips/irix-crtn.asm
+new file mode 100644
+index 000000000..7c28c6ff4
+--- /dev/null
++++ b/libgcc/config/mips/irix-crtn.asm
+@@ -0,0 +1,50 @@
++/* Copyright (C) 2004 Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify it under
++the terms of the GNU General Public License as published by the Free
++Software Foundation; either version 3, or (at your option) any later
++version.
++
++GCC is distributed in the hope that it will be useful, but WITHOUT ANY
++WARRANTY; without even the implied warranty of MERCHANTABILITY or
++FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++for more details.
++
++Under Section 7 of GPL version 3, you are granted additional
++permissions described in the GCC Runtime Library Exception, version
++3.1, as published by the Free Software Foundation.
++
++You should have received a copy of the GNU General Public License and
++a copy of the GCC Runtime Library Exception along with this program;
++see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
++<http://www.gnu.org/licenses/>.  */
++
++	.abicalls
++	.set	noreorder
++	.set	nomacro
++
++	.section .gcc_init,"ax",@progbits
++#if _MIPS_SIM == _ABIO32
++	lw	$31,0($sp)
++	jr	$31
++	addiu	$sp,$sp,16
++#else
++	ld	$31,0($sp)
++	ld	$28,8($sp)
++	jr	$31
++	daddiu	$sp,$sp,16
++#endif
++
++	.section .gcc_fini,"ax",@progbits
++#if _MIPS_SIM == _ABIO32
++	lw	$31,0($sp)
++	jr	$31
++	addiu	$sp,$sp,16
++#else
++	ld	$31,0($sp)
++	ld	$28,8($sp)
++	jr	$31
++	daddiu	$sp,$sp,16
++#endif

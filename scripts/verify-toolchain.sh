@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Verify an installed baseline IRIX 6.5 cross toolchain.
+# Verify an installed IRIX 6.5 cross toolchain.
 #
 # Compiles a trivial translation unit for each IRIX ABI and checks the ELF
 # headers with the toolchain's own readelf and objdump: big-endian MIPS, ELF32
@@ -10,19 +10,25 @@
 # while the ISA level separates o32 from n64. The default ABI (no -mabi flag)
 # must be o32, matching the IRIX 6.5 environment.
 #
-# Usage: scripts/verify-toolchain.sh --prefix DIR
+# The compiler-version assertion is parameterised so the same script checks
+# the 16.2 series and the 15.x fallback builds; every ELF check is identical
+# for all of them.
+#
+# Usage: scripts/verify-toolchain.sh --prefix DIR [--gcc-version VERSION]
 #
 set -euo pipefail
 
 TARGET=mips-sgi-irix6.5
 PREFIX=
+GCC_VERSION=16.2.0
 
 usage() {
 	cat <<'EOF'
-Usage: scripts/verify-toolchain.sh --prefix DIR
+Usage: scripts/verify-toolchain.sh --prefix DIR [--gcc-version VERSION]
 
-  --prefix DIR    installation prefix of the cross toolchain
-  -h, --help      show this help
+  --prefix DIR         installation prefix of the cross toolchain
+  --gcc-version VER    expected GCC release (default 16.2.0)
+  -h, --help           show this help
 EOF
 }
 
@@ -38,6 +44,7 @@ pass() {
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--prefix) PREFIX=$2; shift 2 ;;
+		--gcc-version) GCC_VERSION=$2; shift 2 ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "unknown option: $1 (try --help)" ;;
 	esac
@@ -96,10 +103,11 @@ compile() {
 # --- toolchain identity ----------------------------------------------------
 "$CC" -dumpmachine | grep -qx "$TARGET" ||
 	die "gcc -dumpmachine is not ${TARGET}"
-"$CC" --version | grep -q '15\.2\.0' || die "gcc is not 15.2.0"
+"$CC" --version | grep -qF "$GCC_VERSION" ||
+	die "gcc is not ${GCC_VERSION}"
 "$AS" --version | grep -q 'GNU assembler' || die "as is not GNU as"
 "$LD" --version | grep -q 'GNU ld' || die "ld is not GNU ld"
-pass "toolchain identifies as ${TARGET}, GCC 15.2.0 with GNU as/ld"
+pass "toolchain identifies as ${TARGET}, GCC ${GCC_VERSION} with GNU as/ld"
 
 EF_MIPS_ABI2=0x20
 EF_MIPS_ARCH=0xf0000000

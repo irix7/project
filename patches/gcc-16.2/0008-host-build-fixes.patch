@@ -1,0 +1,200 @@
+Build fixes for native IRIX hosts and legacy IRIX headers
+
+Changes needed to build the compiler suite on IRIX itself and against
+IRIX headers: IRIX's missing snprintf in libbacktrace, libcody,
+libiberty and zlib; <sys/types.h> includes before socket and mmap users;
+the pid_t pex_unix_wait signature; PRI*64 fallbacks in hwint.h and
+sreal.cc; disabling libcody networking; and the gcc/cp mapper client's
+socket headers.
+
+None of these are needed for an x86-host cross build (the sgi/__sgi
+paths are inactive), but they are part of the pdaxrom IRIX layer and
+keep the series a complete port.
+
+Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
+
+diff --git a/c++tools/server.cc b/c++tools/server.cc
+index 1ba8719a4..551c5aaf0 100644
+--- a/c++tools/server.cc
++++ b/c++tools/server.cc
+@@ -36,6 +36,9 @@ along with GCC; see the file COPYING3.  If not see
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ 
++#undef HAVE_AF_UNIX
++#undef HAVE_AF_INET6
++
+ // Network
+ /* Include network stuff first.  Excitingly OSX10.14 uses bcmp here, which
+    we poison later!  */
+diff --git a/fixincludes/server.c b/fixincludes/server.c
+index f1b93a0c3..c9f9161d4 100644
+--- a/fixincludes/server.c
++++ b/fixincludes/server.c
+@@ -155,8 +155,13 @@ close_server (void)
+  *  to our server, and also that if the server dies, we do not
+  *  die from a sigpipe problem.
+  */
++#if sgi
++static void
++sig_handler (void)
++#else
+ static void
+ sig_handler (int signo ATTRIBUTE_UNUSED)
++#endif
+ {
+ #ifdef DEBUG
+   /* FIXME: this is illegal to do in a signal handler.  */
+diff --git a/gcc/cp/mapper-client.cc b/gcc/cp/mapper-client.cc
+index c405e13a0..50d75d1e7 100644
+--- a/gcc/cp/mapper-client.cc
++++ b/gcc/cp/mapper-client.cc
+@@ -22,6 +22,7 @@ along with GCC; see the file COPYING3.  If not see
+ #if defined (__unix__)
+ // Solaris11's socket header used bcopy, which we poison.  cody.hh
+ // will include it later under the above check
++#include <sys/types.h>
+ #include <sys/socket.h>
+ #endif
+ #define INCLUDE_STRING
+diff --git a/gcc/hwint.h b/gcc/hwint.h
+index dfe646cf9..09b2b71ca 100644
+--- a/gcc/hwint.h
++++ b/gcc/hwint.h
+@@ -155,6 +155,18 @@ typedef HOST_WIDE_INT __gcc_host_wide_int__;
+ #  define HOST_BITS_PER_WIDEST_FAST_INT HOST_BITS_PER_LONG
+ #endif
+ 
++#ifndef PRId64
++#define PRId64 "lld"
++#endif
++
++#ifndef PRIu64
++#define PRIu64 "llu"
++#endif
++
++#ifndef PRIx64
++#define PRIx64 "llx"
++#endif
++
+ /* Inline functions operating on HOST_WIDE_INT.  */
+ 
+ /* Return X with all but the lowest bit masked off.  */
+diff --git a/gcc/sreal.cc b/gcc/sreal.cc
+index 2c0962835..b7df0a6ff 100644
+--- a/gcc/sreal.cc
++++ b/gcc/sreal.cc
+@@ -59,6 +59,10 @@ along with GCC; see the file COPYING3.  If not see
+ #include "cgraph.h"
+ #include "data-streamer.h"
+ 
++#ifndef PRIi64
++#define PRIi64 "lli"
++#endif
++
+ /* Print the content of struct sreal.  */
+ 
+ void
+diff --git a/libbacktrace/dwarf.c b/libbacktrace/dwarf.c
+index ecf32f768..8316ab228 100644
+--- a/libbacktrace/dwarf.c
++++ b/libbacktrace/dwarf.c
+@@ -414,7 +414,7 @@ dwarf_buf_error (struct dwarf_buf *buf, const char *msg, int errnum)
+ {
+   char b[200];
+ 
+-  snprintf (b, sizeof b, "%s in %s at %d",
++  sprintf (b, "%s in %s at %d",
+ 	    msg, buf->name, (int) (buf->buf - buf->start));
+   buf->error_callback (buf->data, b, errnum);
+ }
+diff --git a/libbacktrace/fileline.c b/libbacktrace/fileline.c
+index 82535e3f6..c07feaed0 100644
+--- a/libbacktrace/fileline.c
++++ b/libbacktrace/fileline.c
+@@ -300,7 +300,7 @@ fileline_initialize (struct backtrace_state *state,
+ 	  filename = "/proc/curproc/file";
+ 	  break;
+ 	case 5:
+-	  snprintf (buf, sizeof (buf), "/proc/%ld/object/a.out",
++	  sprintf (buf, "/proc/%ld/object/a.out",
+ 		    (long) getpid ());
+ 	  filename = buf;
+ 	  break;
+diff --git a/libcody/buffer.cc b/libcody/buffer.cc
+index 85c066fef..8c582cfcf 100644
+--- a/libcody/buffer.cc
++++ b/libcody/buffer.cc
+@@ -150,7 +150,11 @@ void MessageBuffer::AppendInteger (unsigned u)
+   // gcc 4.8, which is a C++11 compiler lacking std::to_string.  so
+   // have something horrible.
+   std::string v (20, 0);
++#ifdef sgi
++  size_t len = sprintf (const_cast<char *> (v.data ()), "%u", u);
++#else
+   size_t len = snprintf (const_cast<char *> (v.data ()), v.size (), "%u", u);
++#endif
+   v.erase (len);
+ 
+   AppendWord (v);
+diff --git a/libcody/cody.hh b/libcody/cody.hh
+index 93bce93aa..b22633f97 100644
+--- a/libcody/cody.hh
++++ b/libcody/cody.hh
+@@ -5,6 +5,10 @@
+ #ifndef CODY_HH
+ #define CODY_HH 1
+ 
++#ifdef sgi
++#define CODY_NETWORKING 0
++#endif
++
+ // If the user specifies this as non-zero, it must be what we expect,
+ // generally only good for requesting no networking
+ #if !defined (CODY_NETWORKING)
+@@ -20,6 +24,10 @@
+ #endif
+ #endif
+ 
++#ifdef sgi
++#define socklen_t uint32_t
++#endif
++
+ // C++
+ #include <memory>
+ #include <string>
+diff --git a/libiberty/rust-demangle.c b/libiberty/rust-demangle.c
+index 013f14eeb..0df1722d6 100644
+--- a/libiberty/rust-demangle.c
++++ b/libiberty/rust-demangle.c
+@@ -285,7 +285,7 @@ static void
+ print_uint64 (struct rust_demangler *rdm, uint64_t x)
+ {
+   char s[21];
+-  snprintf (s, 21, "%" PRIu64, x);
++  sprintf (s, "%llu", x);
+   PRINT (s);
+ }
+ 
+@@ -293,7 +293,7 @@ static void
+ print_uint64_hex (struct rust_demangler *rdm, uint64_t x)
+ {
+   char s[17];
+-  snprintf (s, 17, "%" PRIx64, x);
++  sprintf (s, "%llx", x);
+   PRINT (s);
+ }
+ 
+diff --git a/zlib/zconf.h b/zlib/zconf.h
+index 62adc8d84..f52c6fcbe 100644
+--- a/zlib/zconf.h
++++ b/zlib/zconf.h
+@@ -540,4 +540,8 @@ typedef uLong FAR uLongf;
+   #pragma map(inflate_copyright,"INCOPY")
+ #endif
+ 
++#if defined(sgi)
++#define NO_vsnprintf
++#endif
++
+ #endif /* ZCONF_H */

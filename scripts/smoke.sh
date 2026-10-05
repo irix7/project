@@ -3,9 +3,9 @@
 # Smoke harness: compile, link, ship, run and diff (issue #5).
 #
 # The project's primary testing seam. One command takes a C source and the
-# exact stdout it must produce, compiles and links it with the baseline cross
-# configured against the captured IRIX sysroot, ships the binary to the guest
-# with iris-ci, runs it there and diffs the guest's stdout against the
+# exact stdout it must produce, compiles and links it with the cross under
+# test configured against the captured IRIX sysroot, ships the binary to the
+# guest with iris-ci, runs it there and diffs the guest's stdout against the
 # expected file.
 #
 # Linking is dynamic by design (ADR-0006): IRIX 6.5 ships no static libc, so
@@ -19,7 +19,7 @@
 #
 # Usage: scripts/smoke.sh [options] SOURCE EXPECTED
 #
-#   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain/prefix)
+#   --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
 #   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
 #                    configured sysroot (gcc -print-sysroot)
 #   --abi ABI        o32 (default), n32 or n64; mapped to -mabi=32|n32|64
@@ -39,7 +39,7 @@ TARGET=mips-sgi-irix6.5
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-PREFIX=${SMOKE_PREFIX:-${REPO_ROOT}/.scratch/toolchain/prefix}
+PREFIX=${SMOKE_PREFIX:-${REPO_ROOT}/.scratch/toolchain-16.2/prefix}
 SYSROOT=
 ABI=o32
 CFLAGS=
@@ -51,11 +51,11 @@ usage() {
 	cat <<'EOF'
 Usage: scripts/smoke.sh [options] SOURCE EXPECTED
 
-Compile SOURCE with the baseline cross, link it dynamically against the
+Compile SOURCE with the cross under test, link it dynamically against the
 captured sysroot, run it on the IRIX guest and diff its stdout against
 EXPECTED.
 
-  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain/prefix)
+  --prefix DIR     cross prefix (default <repo>/.scratch/toolchain-16.2/prefix)
   --sysroot DIR    sysroot to check and pass to GCC; default is the cross's
                    configured sysroot (gcc -print-sysroot)
   --abi ABI        o32 (default), n32 or n64; mapped to -mabi=32|n32|64

@@ -1,0 +1,16 @@
+# GCC 16.2 IRIX patch series.
+#
+# Re-derived from pdaxrom/irix-gcc tag 1.2 (2aa3421b) against the upstream
+# gcc-16.2.0 release. Apply with `patch -p1` from the gcc-16.2.0 source
+# root, in this order; scripts/build-toolchain.sh does this automatically.
+#
+# Every patch keeps GCC's GPL; see docs/toolchain.md for provenance and
+# the 15.3.0/15.2.0 fallback recipe.
+0001-irix-target-config-and-startfiles.patch
+0002-irix-mips-target-macros.patch
+0003-irix-mips-codegen.patch
+0004-irix-libgcc-and-runtime.patch
+0005-irix-configure.patch
+0006-libstdcxx-irix-os-layer.patch
+0007-gcc-stdint-inttypes-guard.patch
+0008-host-build-fixes.patch

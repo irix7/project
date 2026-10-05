@@ -31,13 +31,18 @@ ABI (ADR-0003). The default work directory is version-separated:
 `nix run` exports `IRIX_WORK_ROOT="$PWD/.scratch"`, so it follows the
 caller's tree and `nix run . -- --gcc 15.3.0` lands in
 `.scratch/toolchain-15.3.0`; an explicit `--work-dir` always wins.
-`--languages c` is all the smoke harness needs; adding
-`c,c++` builds the libstdc++ IRIX layer as well, which is carried for the
-C++ deliverable but not exercised by the C-only acceptance (issue #6). A
-`c,c++` build currently stops at libstdc++'s n64 multilib configure because
-there is no n64 link target on the rig; n64 is out of scope (ADR-0003 scope
-note), so the C++ multilib cut is knowingly deferred and the C layer is
-unaffected.
+`--languages c` is all the smoke harness needs. The C++ consumer probe (C)
+in `scripts/test-hosted-stdint.sh` additionally needs `cc1plus`, which a
+C-only cross does not install. A full `c,c++` build stops at libstdc++'s
+n64 multilib configure because there is no n64 link target on the rig; n64
+is out of scope (ADR-0003 scope note), so the C++ multilib cut is knowingly
+deferred and the C layer is unaffected. A C++-capable prefix does not need
+the target libraries: configure with `--languages c,c++`
+(`scripts/build-toolchain.sh --languages c,c++`) and, in the configured GCC
+build tree, run `make all-gcc install-gcc` instead of the full `make`. That
+installs `cc1plus` alongside the C front end and stops before libstdc++,
+and the stdint regression then runs probe C for o32 and n32 along with
+A, B and D.
 
 The smoke harness then proves the dynamic path in the guest (ADR-0006):
 
@@ -221,14 +226,48 @@ avoids incompatible redefinitions and the limits/constant macros still
 come from `stdint-gcc.h` when `inttypes.h` is included first.
 
 `scripts/test-hosted-stdint.sh` is the regression. It compiles hosted
-(o32 and n32), include-order, C++ (when the cross has `cc1plus`) and
-freestanding probes; it is guest-free and reads the capture's headers in
-place. Run it against a rebuilt prefix as:
+(o32 and n32), include-order, C++ and freestanding probes; it is guest-free
+and reads the capture's headers in place. Probes A, B and D run against any
+cross; probe C runs for o32 and n32 once the cross has `cc1plus` (see
+[One command](#one-command) for the `c,c++` recipe that stops before the
+target libraries) and then re-runs automatically. Run it against a rebuilt
+prefix as:
 
 ```sh
 scripts/test-hosted-stdint.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
 ```
+
+## stdint oracle comparison
+
+`scripts/test-stdint-oracle.sh` is the guest half of the issue #30
+evidence. It compiles `oracle/stdint-probe.c` — an independently authored
+probe that names only standard headers and supplies C99's `SIZE_MAX`
+itself — with the cross for o32 and n32, ships the probe and both binaries
+to a namespaced `/tmp` directory on the guest, runs them under the rig's
+shared guest lock, then compiles and runs the same probe in the guest with
+native MIPSpro `cc -o32` and `cc -n32` (driven with `rehash`, as in
+`oracle.sh`). The two stdout streams are diffed per ABI and any differing
+line fails the run.
+
+This is guest evidence, distinct from the guest-free hosted-stdint probes:
+it proves the cross's exact widths, pointer-sized types and limits agree
+with the real MIPSpro oracle for both ABIs, where the host test only proves
+the provided headers compile and match GCC's ABI builtins. It needs the
+running rig and the licensed or locally patched MIPSpro guest from
+`docs/oracle.md`; a missing prefix, sysroot, rig socket, guest login or
+`cc` is reported as a clear skip with no pass, and a transport failure or
+any output difference fails. Run it as:
+
+```sh
+scripts/test-stdint-oracle.sh \
+	--prefix .scratch/toolchain-16.2.0/prefix \
+	--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
+```
+
+Its probe shipping, output parsing, shape checks and per-ABI diff keep
+host-only tests with a fake `iris-ci`:
+`python3 scripts/test-stdint-oracle.py`.
 
 ## The 15.3.0 fallback (and 15.2.0 baseline)
 
@@ -304,6 +343,19 @@ The sysroot-override driver regression is guest-free too; see
 ```sh
 scripts/test-sysroot-override.sh --prefix .scratch/toolchain-16.2.0/prefix
 ```
+
+The stdint policy (issue #30) has its guest-free regression
+(`scripts/test-hosted-stdint.sh`), its guest oracle comparison
+(`scripts/test-stdint-oracle.sh`) and host-only tests for the oracle
+script's shipping, shape and diff logic:
+
+```sh
+python3 scripts/test-stdint-oracle.py
+```
+
+See [stdint policy for the captured
+environment](#stdint-policy-for-the-captured-environment) and [stdint
+oracle comparison](#stdint-oracle-comparison).
 
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify
 output, smoke logs and readelf proof) lives under

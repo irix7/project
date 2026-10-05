@@ -18,6 +18,7 @@
 #   A  hosted <stdint.h>, o32 and n32, with per-ABI _Static_assert checks
 #   B  include-order with the capture's <inttypes.h>, both directions
 #   C  C++ consumer including both headers, when the cross has cc1plus
+#      (a c,c++ cross built with `make all-gcc install-gcc`)
 #   D  freestanding <stdint.h>, which must keep working
 #
 # The sysroot is resolved like scripts/smoke.sh: --sysroot wins, otherwise
@@ -278,7 +279,7 @@ case "$cc1plus" in
 esac
 
 if [ -z "$cc1plus" ] || [ ! -x "$cc1plus" ]; then
-	skip "C C++ probes: cross has no cc1plus (C-only build)"
+	skip "C C++ probes: cross has no cc1plus; configure with --languages c,c++ and build 'make all-gcc install-gcc' (see docs/toolchain.md, 'One command'), then probe C runs for o32 and n32"
 elif [ "$have_native_headers" -ne 1 ]; then
 	skip "C C++ probes: no sysroot inttypes.h (${SYSROOT:-none})"
 else

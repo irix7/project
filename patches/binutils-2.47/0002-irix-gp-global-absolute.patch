@@ -1,0 +1,46 @@
+Keep _gp global and absolute for the IRIX runtime linker
+
+Upstream commit 9e8082845f85cc1cb6be434177aa4d59e00663ff (Maciej W.
+Rozycki, 2012-08-06) wrapped _gp in HIDDEN() in the MIPS emulation
+scripts. The known-good SGUG 2.23.2 link still emits _gp as an absolute
+symbol (LOCAL, ABS), and the 2.20.1 baseline emits it GLOBAL ABS; 2.47
+now emits it as a section-relative local symbol in .got. The IRIX
+runtime linker and the .MIPS.options/REGINFO gp contract expect the
+classic absolute _gp, and its value must stay .got + 0x7ff0. Restore the
+non-HIDDEN, ABSOLUTE definition for the o32 and n32 IRIX emulations; this
+cross only ever builds for mips-sgi-irix6.5, so the script change is
+unconditional in this series.
+
+Effect on the o32 hello signature: _gp 10008000 NOTYPE LOCAL DEFAULT 18
+becomes 10008000 NOTYPE GLOBAL DEFAULT ABS, matching the 2.20.1
+baseline; n32 likewise. Guest validation pending; see docs/binutils.md.
+
+Note: 2.47 also drops the _gp_disp entry from .symtab (upstream
+3be08ea4728b56d35e136af4e6fd3086ade17764, 2018-05-03). Reverting that
+commit's special cases in a scratch probe did not restore the entry, and
+_gp_disp never appears in .dynsym or the loaded image (2.20.1 and SGUG
+2.23.2 put it only in .symtab), so no hunk for it is carried.
+
+
+--- a/ld/emulparams/elf32bmipn32-defs.sh
++++ b/ld/emulparams/elf32bmipn32-defs.sh
+@@ -49,7 +49,7 @@
+ # GOT-related settings.
+ # If the output has a GOT section, there must be exactly 0x7ff0 bytes
+ # between .got and _gp.
+-OTHER_GOT_SYMBOLS='HIDDEN (_gp = ALIGN (16) + 0x7ff0);'
++OTHER_GOT_SYMBOLS='_gp = ABSOLUTE (ALIGN (16) + 0x7ff0);'
+ 
+ # .got.plt is only used for the PLT psABI extension.  It should not be
+ # included in the .sdata block with .got, as there is no need to access
+--- a/ld/emulparams/elf32bmip.sh
++++ b/ld/emulparams/elf32bmip.sh
+@@ -31,7 +31,7 @@
+ "
+ # If the output has a GOT section, there must be exactly 0x7ff0 bytes
+ # between .got and _gp.
+-OTHER_GOT_SYMBOLS='HIDDEN (_gp = ALIGN (16) + 0x7ff0);'
++OTHER_GOT_SYMBOLS='_gp = ABSOLUTE (ALIGN (16) + 0x7ff0);'
+ 
+ # .got.plt is only used for the PLT psABI extension.  It should not be
+ # included in the .sdata block with .got, as there is no need to access

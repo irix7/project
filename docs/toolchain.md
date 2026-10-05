@@ -1,10 +1,12 @@
 # The IRIX toolchain and its patch series
 
 `scripts/build-toolchain.sh` builds the project's `mips-sgi-irix6.5` cross:
-vanilla GNU binutils 2.47 plus an in-repo GCC IRIX layer, carried as a
-patch series against the upstream release (CONTEXT.md's *patch series*).
-Binutils 2.47 needs no target restoration or fix patches (see
-[binutils.md](binutils.md)); `--binutils 2.20.1` still selects the
+GNU binutils 2.47 plus an in-repo GCC IRIX layer, carried as patch series
+against the upstream releases (CONTEXT.md's *patch series*). Vanilla 2.47
+links but fails the controlled guest smoke at startup, so a candidate
+IRIX series now lives in `patches/binutils-2.47/` under guest validation
+(see [binutils.md](binutils.md)); the selector still builds the vanilla
+recipe until a candidate passes, and `--binutils 2.20.1` selects the
 pdaxrom-patched seed fallback. The default target is GCC 16.2.0, the
 project's chosen compiler (ADR-0002); `--gcc` selects the 15.3.0 or 15.2.0
 fallback recipe.
@@ -112,10 +114,11 @@ sha512 list
 | `binutils-2.20.1.tar.bz2` | `71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64` |
 
 The binutils pins are checked against the official sha512 list at
-`https://sourceware.org/pub/binutils/releases/sha512.sum`; 2.47 is vanilla
-(no patches) and 2.20.1 keeps its two pdaxrom patches unchanged. See
-[binutils.md](binutils.md) for the onre comparison and the no-patch
-decision.
+`https://sourceware.org/pub/binutils/releases/sha512.sum`; 2.47 is still
+built vanilla while the `patches/binutils-2.47/` candidate series is under
+guest validation, and 2.20.1 keeps its two pdaxrom patches unchanged. See
+[binutils.md](binutils.md) for the in-guest divergence, the upstream
+archaeology and the candidate signatures.
 
 The work directory defaults to `<work root>/toolchain-<gcc version>` so a
 default build can never overwrite another version's tree, in particular the

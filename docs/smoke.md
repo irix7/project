@@ -45,7 +45,8 @@ nonshared archives are tagged `noship`, and there is no nonshared `crt1.o` —
 so the only shipping model is to link SGI's `crt1.o`, `libc.so` and `libm.so`
 from the captured sysroot. The harness runs the cross's own `readelf` and
 refuses a binary without `PT_INTERP`, which keeps a future `-static` case out
-of this seam. That proof belongs to the rebuilt runtime (#9), not here.
+of this seam. That proof now lives in the rebuilt runtime (`docs/runtime.md`,
+issue #9) as a static o32 link against the tree's own startfiles and archive.
 
 The cross must be configured against the captured sysroot, so the harness
 defaults `--sysroot` to the path the compiler prints with `-print-sysroot` and

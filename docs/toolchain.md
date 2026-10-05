@@ -168,7 +168,7 @@ patches/gcc-16.2/
   0001-irix-target-config-and-startfiles.patch   config.gcc, multilib, crt files
   0002-irix-mips-target-macros.patch             iris.h/iris5.h/iris6.h, mips.h
   0003-irix-mips-codegen.patch                   mips.cc, dwarf2cfi.cc, varasm.cc
-  0004-irix-libgcc-and-runtime.patch             gthr-posix, libgcov, libgomp
+  0004-irix-libgcc-and-runtime.patch             libgcov, libgomp; gthr-posix kept upstream
   0005-irix-configure.patch                      configure.ac and configure
   0006-libstdcxx-irix-os-layer.patch             config/os/irix, configure.host
   0007-gcc-stdint-inttypes-guard.patch           ginclude/stdint-gcc.h
@@ -207,6 +207,19 @@ re-derivations against 16.2 were:
   longer exists in 15.2 or 16.2; the define is inert and is carried for
   fidelity rather than re-derived. No hunk changed behaviour when ported:
   the whole series applies to the pristine 16.2 tarball with no rejects.
+- **gthr-posix hunks dropped.** The pdaxrom diff commented out IRIX's
+  `pthread_rwlock_*`, `pthread_equal`, `sched_yield` and
+  `pthread_mutexattr_settype` references, claiming IRIX 6.5 lacks them;
+  without the `settype` call libgcc's recursive mutexes were plain mutexes
+  (audit finding C14). The captured 6.5.7m headers declare every one of
+  them — `pthread_equal` (with its identity macro),
+  `pthread_mutexattr_settype` and `PTHREAD_MUTEX_RECURSIVE`, the
+  `pthread_rwlock_t` typedef with the `pthread_rwlock_*` operations, and
+  `sched_yield`, which the captured `libc.so` already exports as a weak
+  symbol — so no hunk was carried. `gthr-posix.h` stays at the upstream
+  release, and the target genuinely lacks only the static recursive
+  initialiser macros, which upstream already selects
+  `__gthread_recursive_mutex_init_function` for.
 
 The series applies with `patch -p1` from the `gcc-16.2.0` source root, in
 `series` order; `build-toolchain.sh` records the applied bytes and their
@@ -280,6 +293,42 @@ scripts/test-stdint-oracle.sh \
 Its probe shipping, output parsing, shape checks and per-ABI diff keep
 host-only tests with a fake `iris-ci`:
 `python3 scripts/test-stdint-oracle.py`.
+
+## gthread capability selection
+
+`libgcc/gthr-posix.h` stays at the upstream release (issue #31): the
+captured 6.5.7m headers declare the recursive mutex type, `pthread_equal`,
+`sched_yield` and the rwlock contract, so the pdaxrom hunks that commented
+them out were dropped rather than replaced with a semantic no-op. The
+pthread entry points live in `/usr/lib/libpthread.so` and
+`/usr/lib32/libpthread.so`, which `scripts/rig/sysroot.files` now names so
+the next capture can link `-lpthread` (that capture also lets
+`build-toolchain.sh` build `libatomic` again).
+
+Two regressions keep the selection honest. The guest-free
+`scripts/rig/test-gthread-patch.py` checks the patch header and the applied
+header, runs the selection logic on the host, compiles it against the
+captured headers for o32 and n32, and — once the recaptured sysroot ships
+`libpthread.so` — checks the exported symbols by name. The guest probe
+builds `scripts/smoke/gthread-recursive.c` for both ABIs with the cross,
+ships it through the shared fail-closed transaction with a bounded timeout
+and diffs its stdout against the committed expected file. It covers a
+double lock and double unlock on one thread, cross-thread exclusion,
+recursive attribute initialisation and error handling, `pthread_equal`
+(macro and entry point), `sched_yield` and the rwlock contract:
+
+```sh
+python3 scripts/rig/test-gthread-patch.py
+
+scripts/test-gthread-recursive.sh \
+	--prefix .scratch/toolchain-16.2.0/prefix \
+	--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
+```
+
+A missing prefix, cross, sysroot, rig, guest login or capture
+`libpthread.so` is a clear skip; a link failure once the library is
+present, a transport failure, a non-zero status or any output difference
+fails closed, so an unsupported contract can never be a silent no-op.
 
 ## The 15.3.0 fallback (and 15.2.0 baseline)
 
@@ -380,6 +429,12 @@ python3 scripts/test-stdint-oracle.py
 See [stdint policy for the captured
 environment](#stdint-policy-for-the-captured-environment) and [stdint
 oracle comparison](#stdint-oracle-comparison).
+
+The gthread capability selection (issue #31) has its guest-free regression
+(`python3 scripts/rig/test-gthread-patch.py`) and its bounded guest probe
+(`scripts/test-gthread-recursive.sh` with
+`scripts/smoke/gthread-recursive.c` and its expected file); see [gthread
+capability selection](#gthread-capability-selection).
 
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify
 output, smoke logs and readelf proof) lives under

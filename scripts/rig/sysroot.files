@@ -6,6 +6,7 @@ usr/lib/acrt1.o
 usr/lib/libc.so
 usr/lib/libc.so.1
 usr/lib/libm.so
+usr/lib/libpthread.so
 lib/libc.so.1
 usr/lib32/crt1.o
 usr/lib32/crtn.o
@@ -13,6 +14,7 @@ usr/lib32/mcrt1.o
 usr/lib32/libc.so
 usr/lib32/libc.so.1
 usr/lib32/libm.so
+usr/lib32/libpthread.so
 usr/lib32/mips3/crt1.o
 usr/lib32/mips3/crtn.o
 usr/lib32/mips3/mcrt1.o

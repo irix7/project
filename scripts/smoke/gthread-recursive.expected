@@ -1,0 +1,36 @@
+gthread-recursive: begin
+mutexattr_init=ok
+mutexattr_settype_recursive=ok
+mutexattr_gettype_recursive=ok
+mutexattr_settype_invalid=EINVAL
+recursive_init=ok
+mutexattr_destroy=ok
+recursive_lock_1=ok
+recursive_lock_2=ok
+recursive_unlock_2=ok
+recursive_unlock_1=ok
+recursive_trylock_1=ok
+recursive_trylock_2=ok
+recursive_trylock_unlock_2=ok
+recursive_trylock_unlock_1=ok
+recursive_lock_for_cross_thread=ok
+cross_thread_create=ok
+cross_thread_trylock_while_held=EBUSY
+recursive_unlock_for_cross_thread=ok
+cross_thread_join=ok
+cross_thread_lock_after_release=ok
+pthread_equal_self=ok
+pthread_equal_other=ok
+pthread_equal_symbol=ok
+sched_yield=ok
+recursive_destroy=ok
+rwlock_init=ok
+rwlock_trywrlock=ok
+rwlock_create=ok
+rwlock_join=ok
+rwlock_cross_tryrdlock=EBUSY
+rwlock_unlock=ok
+rwlock_tryrdlock=ok
+rwlock_unlock_rd=ok
+rwlock_destroy=ok
+gthread-recursive: PASS

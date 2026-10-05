@@ -1,181 +1,30 @@
 libgcc/libgomp IRIX runtime adjustments
 
-IRIX 6.5 pthreads lack pthread_rwlock_*, pthread_equal, sched_yield and
-pthread_mutexattr_settype, so gthr-posix.h must not reference them.
 libgcov maps anonymous memory from /dev/zero because IRIX has no
 MAP_ANONYMOUS. libgomp reads _SC_NPROC_ONLN instead of _SC_NPROCESSORS_ONLN
 and links itself against -lpthread.
 
+The pdaxrom source diff also carried gthr-posix.h hunks commenting out
+IRIX's pthread_rwlock_*, pthread_equal, sched_yield and
+pthread_mutexattr_settype references "because IRIX lacks them"; dropping
+the settype call left libgcc's recursive mutexes as plain mutexes (audit
+finding C14). The captured 6.5.7m headers contradict that premise:
+usr/include/pthread.h declares pthread_equal (with the identity macro),
+pthread_mutexattr_settype and PTHREAD_MUTEX_RECURSIVE, sys/pthread.h
+defines pthread_rwlock_t while pthread.h declares the pthread_rwlock_*
+operations, and usr/include/sched.h declares sched_yield, which the
+captured o32 and n32 libc.so export as a weak symbol. Every gthr-posix.h
+hunk is therefore dropped and the file stays at the upstream release; the
+target genuinely lacks only the static recursive initialisers, which
+upstream already selects __gthread_recursive_mutex_init_function for.
+The pthread entry points live in libpthread.so, now listed in
+scripts/rig/sysroot.files; scripts/test-gthread-recursive.sh links
+against it on the guest and fails when a symbol is missing, and
+scripts/rig/test-gthread-patch.py checks the selection against the
+capture, so no capability is silently commented out.
+
 Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b), gcc-15.2.0-irix.diff.
 
-diff --git a/libgcc/gthr-posix.h b/libgcc/gthr-posix.h
-index 3984d0666..3ae46d217 100644
---- a/libgcc/gthr-posix.h
-+++ b/libgcc/gthr-posix.h
-@@ -64,7 +64,7 @@ typedef pthread_key_t __gthread_key_t;
- typedef pthread_once_t __gthread_once_t;
- typedef pthread_mutex_t __gthread_mutex_t;
- #ifndef __cplusplus
--typedef pthread_rwlock_t __gthread_rwlock_t;
-+/*typedef pthread_rwlock_t __gthread_rwlock_t;*/
- #endif
- typedef pthread_mutex_t __gthread_recursive_mutex_t;
- typedef pthread_cond_t __gthread_cond_t;
-@@ -126,13 +126,13 @@ __gthrw(pthread_setspecific)
- 
- __gthrw(pthread_create)
- __gthrw(pthread_join)
--__gthrw(pthread_equal)
-+/*__gthrw(pthread_equal)*/
- __gthrw(pthread_self)
- __gthrw(pthread_detach)
- #ifndef __BIONIC__
- __gthrw(pthread_cancel)
- #endif
--__gthrw(sched_yield)
-+/*__gthrw(sched_yield)*/
- 
- __gthrw(pthread_mutex_lock)
- __gthrw(pthread_mutex_trylock)
-@@ -153,15 +153,15 @@ __gthrw(pthread_cond_destroy)
- __gthrw(pthread_key_create)
- __gthrw(pthread_key_delete)
- __gthrw(pthread_mutexattr_init)
--__gthrw(pthread_mutexattr_settype)
-+/*__gthrw(pthread_mutexattr_settype)*/
- __gthrw(pthread_mutexattr_destroy)
- 
- #ifndef __cplusplus
--__gthrw(pthread_rwlock_rdlock)
--__gthrw(pthread_rwlock_tryrdlock)
--__gthrw(pthread_rwlock_wrlock)
--__gthrw(pthread_rwlock_trywrlock)
--__gthrw(pthread_rwlock_unlock)
-+/*__gthrw(pthread_rwlock_rdlock)*/
-+/*__gthrw(pthread_rwlock_tryrdlock)*/
-+/*__gthrw(pthread_rwlock_wrlock)*/
-+/*__gthrw(pthread_rwlock_trywrlock)*/
-+/*__gthrw(pthread_rwlock_unlock)*/
- #endif
- 
- #if defined(_LIBOBJC) || defined(_LIBOBJC_WEAK)
-@@ -491,12 +491,12 @@ __gthread_objc_thread_get_priority (void)
- }
- 
- /* Yield our process time to another thread.  */
--static inline void
-+/*static inline void
- __gthread_objc_thread_yield (void)
- {
-   if (__gthread_active_p ())
-     __gthrw_(sched_yield) ();
--}
-+}*/
- 
- /* Terminate the current thread.  */
- static inline int
-@@ -721,11 +721,11 @@ __gthread_detach (__gthread_t __threadid)
-   return __gthrw_(pthread_detach) (__threadid);
- }
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_equal (__gthread_t __t1, __gthread_t __t2)
- {
-   return __gthrw_(pthread_equal) (__t1, __t2);
--}
-+}*/
- 
- __GTHREAD_INLINE __gthread_t
- __gthread_self (void)
-@@ -733,11 +733,11 @@ __gthread_self (void)
-   return __gthrw_(pthread_self) ();
- }
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_yield (void)
- {
-   return __gthrw_(sched_yield) ();
--}
-+}*/
- 
- __GTHREAD_INLINE int
- __gthread_once (__gthread_once_t *__once, void (*__func) (void))
-@@ -838,9 +838,9 @@ __gthread_recursive_mutex_init_function (__gthread_recursive_mutex_t *__mutex)
-       int __r;
- 
-       __r = __gthrw_(pthread_mutexattr_init) (&__attr);
--      if (!__r)
--	__r = __gthrw_(pthread_mutexattr_settype) (&__attr,
--						   PTHREAD_MUTEX_RECURSIVE);
-+//      if (!__r)
-+//	__r = __gthrw_(pthread_mutexattr_settype) (&__attr,
-+//						   PTHREAD_MUTEX_RECURSIVE);
-       if (!__r)
- 	__r = __gthrw_(pthread_mutex_init) (__mutex, &__attr);
-       if (!__r)
-@@ -932,50 +932,50 @@ __gthread_cond_destroy (__gthread_cond_t* __cond)
- }
- 
- #ifndef __cplusplus
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_rwlock_rdlock (__gthread_rwlock_t *__rwlock)
- {
-   if (__gthread_active_p ())
-     return __gthrw_(pthread_rwlock_rdlock) (__rwlock);
-   else
-     return 0;
--}
-+}*/
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_rwlock_tryrdlock (__gthread_rwlock_t *__rwlock)
- {
-   if (__gthread_active_p ())
-     return __gthrw_(pthread_rwlock_tryrdlock) (__rwlock);
-   else
-     return 0;
--}
-+}*/
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_rwlock_wrlock (__gthread_rwlock_t *__rwlock)
- {
-   if (__gthread_active_p ())
-     return __gthrw_(pthread_rwlock_wrlock) (__rwlock);
-   else
-     return 0;
--}
-+}*/
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_rwlock_trywrlock (__gthread_rwlock_t *__rwlock)
- {
-   if (__gthread_active_p ())
-     return __gthrw_(pthread_rwlock_trywrlock) (__rwlock);
-   else
-     return 0;
--}
-+}*/
- 
--__GTHREAD_INLINE int
-+/*__GTHREAD_INLINE int
- __gthread_rwlock_unlock (__gthread_rwlock_t *__rwlock)
- {
-   if (__gthread_active_p ())
-     return __gthrw_(pthread_rwlock_unlock) (__rwlock);
-   else
-     return 0;
--}
-+}*/
- #endif
- 
- #endif /* _LIBOBJC */
 diff --git a/libgcc/libgcov.h b/libgcc/libgcov.h
 index 1643b4440..eaa1bb499 100644
 --- a/libgcc/libgcov.h

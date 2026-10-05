@@ -78,8 +78,8 @@ installs rejects the `--sysroot` the sysroot-configured GCC passes — its
 `--help` advertises the option either way, so GCC's configure is fooled), and
 it skips libatomic while the capture has `pthread.h` but not the o32 and n32
 `libpthread.so`. Both are handled there, so one command from a clean checkout
-gives the harness its cross; libatomic returns automatically once #18 adds
-`libpthread.so` to `sysroot.files`.
+gives the harness its cross; libatomic returns automatically once
+`sysroot.files` names `libpthread.so` and the sysroot is recaptured.
 
 ## Preconditions and exit behaviour
 

@@ -44,6 +44,20 @@ using the generated specs file to select the assembler and linker:
 | control specs pointing at the configured 2.20.1 | passes o32 |
 | vanilla 2.47 | links, guest dies with SIGSEGV (exit 139) before output |
 | onre's partial port (prefix-2.47-onre) | guest dies with SIGBUS (exit 138) |
+| cand-a (SGUG GOT, patch 0001) | o32 SIGBUS (138); n32 passes |
+| cand-b (`_gp`, patch 0002) | o32 SIGSEGV (139); n32 SIGSEGV |
+| cand-c (0001+0002) | o32 SIGBUS (138); n32 passes |
+
+The integrator's root-cause lead for the o32 crash: the working 2.20.1
+output carries the `.rld_map` section and the map slot is inside the RW
+segment's zero-filled tail, while the 2.47 variants have no `.rld_map`,
+`DT_MIPS_RLD_MAP` names a slot in the `.sbss` tail, and (on the
+guest-tested binaries) the RW segment's `p_memsz` equals `p_filesz`, so
+IRIX rld's startup write to the map pointer faults. That is the
+divergence patch 0003 restores; see the archaeology below. Note that on
+this host the 2.47 links already report `p_memsz 0xa0` with the slot
+inside `.sbss`; the fix is judged by the guest, and the readelf rows
+below record both.
 
 The same o32 hello's readelf signature:
 
@@ -91,6 +105,36 @@ loaded image the reverted hunks could not be demonstrated. No hunk for
 `_gp_disp` is therefore carried; this is recorded here so a future
 investigation starts from the probe result rather than the commit alone.
 
+### `.rld_map` was dropped for IRIX (2012)
+
+Commit `e6aea42dfaf13c0e0ca10fa604537a2f43ce9ae9` (Maciej W. Rozycki,
+2012-12-03, PR ld/10629) replaced `_bfd_mips_elf_create_dynamic_sections`'s
+`.rld_map` creation arm
+
+```c
+  if ((IRIX_COMPAT (abfd) == ict_irix5 || IRIX_COMPAT (abfd) == ict_none)
+      && !info->shared
+      && bfd_get_linker_section (abfd, ".rld_map") == NULL)
+```
+
+with `!mips_elf_hash_table (info)->use_rld_obj_head`. IRIX crt1.o defines
+`__rld_obj_head`, so for o32 (whose output vector is `elf32-bigmips` and
+whose `IRIX_COMPAT` is `ict_irix5`) the section is no longer created at
+all, while the 2.20.1 and SGUG 2.23.2 baselines carry it. The
+`bfd_get_linker_section`/`bfd_make_section_anyway` form came earlier
+(`3d4d4302b9`, "$(bfd_get_linker_section): New function...") and is not
+the cause: the section flags already included `SEC_LINKER_CREATED` in
+2.20.1, where the orphan script still placed it. `DT_MIPS_RLD_MAP_REL`
+(`a5499fa464`, 2015) is unrelated and is kept.
+
+Patch 0003 restores the `ict_irix5` arm for `bfd_link_executable` output
+and keeps the modern `!use_rld_obj_head` rule for every other MIPS
+target. On this host it restores the `.rld_map` marker section at
+`0x10000010` in the o32 output exactly as the baseline has it; the map
+slot itself is still `__rld_obj_head` in `.sbss` (baseline `0x10000070`,
+candidates `0x10000068`), and both sit inside the RW segment's
+zero-filled tail on this host.
+
 ### GOT-local classification (SGUG 2.23, onre 2.44)
 
 `sgidevnet/sgug-rse`'s `packages/binutils/binutils2_23.sgifixes.patch`
@@ -104,20 +148,21 @@ candidate series carries both halves, mapped to 2.47 where
 `mips_elf_count_got_symbols` and `mips_elf_calculate_relocation` consume
 `mips_use_local_got_p`.
 
-### Other post-SGUG deltas, not patched
+### Other post-SGUG deltas
 
 - `DT_MIPS_RLD_MAP_REL` (`a5499fa464`, "Add support for
-  DT_MIPS_RLD_MAP_REL.") is emitted for every executable in 2.47; SGUG
-  2.23.2 predates it.
+  DT_MIPS_RLD_MAP_REL.") is emitted for every executable in 2.47 and is
+  kept: IRIX rld ignores the unknown tag, and removing it would touch
+  generic MIPS output.
 - `.MIPS.abiflags`/`PT_MIPS_ABIFLAGS` (`351cdf24d2`, "[MIPS] Implement
-  O32 FPXX, FP64 and FP64A ABI extensions", 2014) is also newer than the
-  SGUG reference.
+  O32 FPXX, FP64 and FP64A ABI extensions", 2014) is newer than the SGUG
+  reference; no hunk is carried yet.
 - Modern ld no longer emits the local hidden `.dynsym` entries
   `__TMC_END__`/`__DTOR_END__` (MIPS_SYMTABNO 22 vs 24, MIPS_GOTSYM 0x9
-  vs 0xb), an as-yet unidentified generic change.
+  vs 0xb), an as-yet unidentified generic change; no hunk is carried yet.
 
-These remain deliberate no-patch verdicts until a candidate's guest smoke
-shows one of them matters.
+These two remain deliberate no-patch verdicts until a candidate's guest
+smoke shows one of them matters.
 
 ## Candidate series
 
@@ -128,8 +173,9 @@ script yet) applies with `patch -p1` from the binutils-2.47 source root:
 | --- | --- |
 | `0001-irix-got-local-restoration.patch` | SGUG's forced-local GOT predicate plus the `check_forced` relocation-time half |
 | `0002-irix-gp-global-absolute.patch` | `_gp = ABSOLUTE (ALIGN (16) + 0x7ff0)` (not `HIDDEN`) in the o32 and n32 emulation scripts |
+| `0003-irix-rld-map-section.patch` | restore the `ict_irix5` `.rld_map` creation arm removed by `e6aea42dfa` |
 
-Three prefixes were built in scratch for the controlled guest smoke, each
+Five prefixes were built in scratch for the controlled guest smoke, each
 with a generated specs file (the spec routes the driver's `as`/`ld` to the
 candidate prefix as described in [toolchain.md](toolchain.md)):
 
@@ -138,25 +184,37 @@ candidate prefix as described in [toolchain.md](toolchain.md)):
 | a | 0001 | `.scratch/binutils-build/prefix-cand-a` | `.scratch/binutils-build/diag/cand-a.specs` |
 | b | 0002 | `.scratch/binutils-build/prefix-cand-b` | `.scratch/binutils-build/diag/cand-b.specs` |
 | c | 0001+0002 | `.scratch/binutils-build/prefix-cand-c` | `.scratch/binutils-build/diag/cand-c.specs` |
+| d | 0001+0003 | `.scratch/binutils-build/prefix-cand-d` | `.scratch/binutils-build/diag/cand-d.specs` |
+| e | 0001+0002+0003 | `.scratch/binutils-build/prefix-cand-e` | `.scratch/binutils-build/diag/cand-e.specs` |
 
 Signatures of `oracle/hello.c` linked through each candidate (`_gp`
 binding, `.symtab`; GOT tags from `.dynamic`; o32 has MIPS_HIPAGENO, n32
-is NEWABI and has none):
+is NEWABI and has none; `.rld_map` address and the RW segment sizes from
+the candidate binutils readelf; `MIPS_RLD_MAP` is the map slot):
 
-| candidate | ABI | `_gp` | `_gp_disp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | SYMTABNO |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| a | o32 | `10008000` LOCAL section .got | absent | 9 | 0x9 | 7 | 22 |
-| a | n32 | `10018b40` LOCAL section .got | absent | 12 | 0x9 | – | 22 |
-| b | o32 | `10008000` GLOBAL ABS | absent | 13 | 0xd | 11 | 22 |
-| b | n32 | `10018b40` GLOBAL ABS | absent | 16 | 0xd | – | 22 |
-| c | o32 | `10008000` GLOBAL ABS | absent | 9 | 0x9 | 7 | 22 |
-| c | n32 | `10018b40` GLOBAL ABS | absent | 12 | 0x9 | – | 22 |
+| candidate | ABI | `_gp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | `.rld_map` | RW fsz/msz | MIPS_RLD_MAP |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| a | o32 | LOCAL section .got | 9 | 0x9 | 7 | absent | 0x68/0xa0 | 0x10000068 |
+| a | n32 | LOCAL section .got | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
+| b | o32 | GLOBAL ABS | 13 | 0xd | 11 | absent | 0x68/0xa0 | 0x10000068 |
+| b | n32 | GLOBAL ABS | 16 | 0xd | – | absent | 0x14c/0x19c | 0x10010be0 |
+| c | o32 | GLOBAL ABS | 9 | 0x9 | 7 | absent | 0x68/0xa0 | 0x10000068 |
+| c | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
+| d | o32 | LOCAL section .got | 9 | 0x9 | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| d | n32 | LOCAL section .got | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
+| e | o32 | GLOBAL ABS | 9 | 0x9 | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| e | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
+| 2.20.1 baseline | o32 | GLOBAL ABS | 9 | 0xb | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000070 |
 
 Candidate a restores the SGUG GOT counts (9/0xb shape, 22-entry dynsym),
 but keeps `_gp` local in `.got`, exactly like onre's SIGBUS build.
 Candidate b restores the classic `_gp` symbol but keeps vanilla's GOT
-classification. Candidate c combines both. All three pass the guest-free
-regression; the guest smoke decides.
+classification. Candidate c combines both. Candidates d and e add the
+`.rld_map` restoration to a and c; on this host the map slot sits in the
+`.sbss` tail at `0x10000068` (the baseline has `__rld_obj_head` at
+`0x10000070`, still inside the same zero-filled region); the guest
+decides whether the restored section is what rld needs. All five pass the
+guest-free regression.
 
 ## Host verification
 
@@ -164,7 +222,7 @@ regression; the guest smoke decides.
 regression. It checks identity, o32/n32 emission (ELF headers and
 relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
 libc/libm) against a candidate binutils prefix through a generated specs
-file. All three candidates pass it with `--binutils-version 2.47`, and the
+file. All five candidates pass it with `--binutils-version 2.47`, and the
 script still passes against 2.20.1 with `--binutils-version 2.20.1`.
 
 The prefixes and specs above are scratch artefacts (`.scratch/` is
@@ -173,15 +231,16 @@ line as the vanilla recipe plus `patch -p1` in series order.
 
 ## Guest smoke for the integrator
 
-For each candidate, with the existing 16.2 cross and the candidate specs
-file; the specs path is substituted per candidate:
+The current round is cand-d (SGUG GOT + `.rld_map`) and cand-e (SGUG GOT
++ `_gp` + `.rld_map`); cand-a/b/c are retained for regression comparison.
+Each run uses the existing 16.2 cross and the candidate's specs file:
 
 ```sh
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-c.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-e.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-c.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-e.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 

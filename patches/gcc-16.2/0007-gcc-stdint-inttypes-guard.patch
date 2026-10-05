@@ -1,9 +1,20 @@
 Guard GCC's stdint types against IRIX <inttypes.h>
 
-IRIX 6.5's <inttypes.h> defines the same integer types as GCC's stdint.h
-wrapper; gate the duplicate typedefs on __inttypes_INCLUDED and set it
-afterwards. Without this, translation units that include both headers
-fail with redefinitions.
+IRIX 6.5's <inttypes.h> defines int8_t..uint64_t, intmax_t/uintmax_t and
+intptr_t/uintptr_t in its own typedef block. __inttypes_INCLUDED is that
+header's own guard macro, defined at the top of that block; gating
+stdint-gcc.h's duplicate exact-width and greatest-width typedefs on it, and
+setting it afterwards, lets either inclusion order compile. The limits and
+constant macros stay outside the guard: the capture's inttypes.h defines
+its limit macros only when its _SGIAPI predicate holds, which it does not
+by default, so inttypes-first still needs INT32_MAX and friends from
+stdint-gcc.h.
+
+Re-checked against the 6.5.7m capture for issue #30, where use_gcc_stdint
+is provide and stdint-gcc.h is installed directly (0001): both orders
+compile for o32 and n32, and the intptr_t/uintptr_t typedefs left outside
+the guard resolve to the same long/unsigned long types the capture's
+inttypes.h uses. No hunk change was needed from the pdaxrom original.
 
 Provenance: pdaxrom/irix-gcc tag 1.2 (2aa3421b),
 gcc-15.2.0-irix65-abi64.diff.

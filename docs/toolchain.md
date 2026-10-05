@@ -196,6 +196,40 @@ The series applies with `patch -p1` from the `gcc-16.2.0` source root, in
 sha256 per patch, so a re-run skips what is already applied and a changed
 patch is reversed and reapplied (see *Resumption and build identity*).
 
+## stdint policy for the captured environment
+
+The `mips-sgi-irix6.5` stanza in `0001` selects `use_gcc_stdint=provide`
+(issue #30), where pdaxrom wrapped a system header for 6.5. `provide`
+installs `ginclude/stdint-gcc.h` directly as the cross's `stdint.h`;
+`wrap` installs `ginclude/stdint-wrap.h`, which `#include_next`s the
+target's `stdint.h` when hosted. The required 6.5.7m capture has no
+`/usr/include/stdint.h` — it ships `inttypes.h`, and only the optional
+IRIX Development Foundation 1.3 provides a system `stdint.h` — so under
+`wrap` a hosted `#include <stdint.h>` fails at `include_next` for both
+o32 and n32. `provide` is already the policy for IRIX 5 and 6.0–6.4, so
+6.5 is now consistent with the rest of the stanza.
+
+`provide` also keeps freestanding compilation working: `stdint-gcc.h` is
+installed as the header itself rather than pulled in through the wrapper's
+`__STDC_HOSTED__` branch. The trade-off is that an installation which does
+ship a system `stdint.h` (IDF 1.3) gets GCC's header, because the GCC
+include directory precedes the sysroot in the search order. Patch `0007`
+keeps that safe: it gates `stdint-gcc.h`'s exact-width and greatest-width
+typedefs on `__inttypes_INCLUDED`, the guard the capture's own
+`inttypes.h` defines before its typedef block, so either inclusion order
+avoids incompatible redefinitions and the limits/constant macros still
+come from `stdint-gcc.h` when `inttypes.h` is included first.
+
+`scripts/test-hosted-stdint.sh` is the regression. It compiles hosted
+(o32 and n32), include-order, C++ (when the cross has `cc1plus`) and
+freestanding probes; it is guest-free and reads the capture's headers in
+place. Run it against a rebuilt prefix as:
+
+```sh
+scripts/test-hosted-stdint.sh --prefix .scratch/toolchain-16.2/prefix \
+	--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
+```
+
 ## The 15.3.0 fallback (and 15.2.0 baseline)
 
 `--gcc 15.3.0` selects the fallback recipe: the pdaxrom **15.2.0** diffs

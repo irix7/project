@@ -85,7 +85,6 @@ whole capture has been retrieved, extracted, attested and re-validated:
 ```
 $RIG_ORACLE_DIR/
 ├── sysroot -> generations/sysroot-<rig-gen>-<utc-stamp>/sysroot   (symlink)
-├── current -> generations/sysroot-<rig-gen>-<utc-stamp>           (symlink)
 ├── generations/
 │   ├── sysroot-<rig-gen>-<utc-stamp>/   a complete capture
 │   └── sysroot-legacy-<utc-stamp>/      archived pre-generation capture
@@ -98,13 +97,13 @@ generation and the previous ones stay readable. A run starts in a hidden
 `.build-<name>` directory; `oracle-capture.py finalise` checks every retrieval
 is present and non-empty, extracts the tarball in confinement, writes the
 manifests and validates the result, and `publish` then renames the directory
-into place and swaps the two symlinks with a rename each. A failed compile,
-transfer, extraction or validation publishes nothing: the `sysroot` symlink
-still names the last complete generation, and the failed build directory is
-left for inspection rather than deleted. The first publication over a
-pre-generation real `sysroot/` directory moves that directory (and any loose
-evidence files beside it) into `generations/sysroot-legacy-<stamp>/` instead
-of deleting it.
+into place and swaps the single authoritative `sysroot` symlink with one
+rename. A failed compile, transfer, extraction or validation publishes
+nothing: the `sysroot` symlink still names the last complete generation, and
+the failed build directory is left for inspection rather than deleted. The
+first publication over a pre-generation real `sysroot/` directory moves that
+directory (and any loose evidence files beside it) into
+`generations/sysroot-legacy-<stamp>/` instead of deleting it.
 
 Each generation directory holds:
 
@@ -131,15 +130,19 @@ d <path>                              a directory
 f <sha256> <path>                     a regular file's content
 l <target> <resolved> <path>          a symlink's immediate target and the
                                       final path its complete chain resolves to
+l <target> - <path>                   a symlink whose chain is dangling: IRIX
+                                      ships links for development subsets that
+                                      are not installed, and the capture
+                                      attests the target without inventing it
 ```
 
-A chain that dangles, loops or resolves outside the tree is a validation
-error, so a published sysroot is closed under its own links. Extraction is
-confined: an absolute member name, `..` traversal, a symlink or hard link
-escaping the root, an unsupported member type (device, FIFO, socket) and a
-corrupt archive are all refused before anything is written. `manifest.sha256`
-is re-checked at publication, so a truncated or tampered retrieval cannot be
-published. The host-only tests cover each failure stage and the symlink swap:
+A chain that loops or resolves outside the tree is a validation error.
+Extraction is confined: an absolute member name, `..` traversal, a symlink or
+hard link escaping the root, an unsupported member type (device, FIFO,
+socket) and a corrupt archive are all refused before anything is written.
+`manifest.sha256` is re-checked at publication, so a truncated or tampered
+retrieval cannot be published. The host-only tests cover each failure stage
+and the symlink swap:
 
 ```sh
 python3 scripts/rig/test-oracle-capture.py

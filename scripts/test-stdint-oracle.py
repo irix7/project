@@ -25,27 +25,10 @@ ORACLE = REPO_ROOT / "scripts" / "test-stdint-oracle.sh"
 HOSTED = REPO_ROOT / "scripts" / "test-hosted-stdint.sh"
 PROBE = REPO_ROOT / "oracle" / "stdint-probe.c"
 
-# The independently authored IRIX o32/n32 model the probe must print.
-EXPECTED = "\n".join(
-    [
-        "sizeof(int8_t)=1",
-        "sizeof(int16_t)=2",
-        "sizeof(int32_t)=4",
-        "sizeof(int64_t)=8",
-        "sizeof(uint8_t)=1",
-        "sizeof(uint16_t)=2",
-        "sizeof(uint32_t)=4",
-        "sizeof(uint64_t)=8",
-        "sizeof(intptr_t)=4",
-        "sizeof(uintptr_t)=4",
-        "sizeof(intmax_t)=8",
-        "sizeof(uintmax_t)=8",
-        "sizeof(void*)=4",
-        "INT32_MAX=2147483647",
-        "UINT64_MAX=ffffffffffffffff",
-        "SIZE_MAX=4294967295",
-    ]
-) + "\n"
+# The one independently authored IRIX o32/n32 model the probe must print, read
+# from the same file the script reads so the shell and Python sides cannot
+# drift.
+EXPECTED = (REPO_ROOT / "scripts" / "stdint-oracle.model").read_text()
 
 GCC_STUB = """\
 #!/usr/bin/env bash
@@ -170,14 +153,19 @@ if op == "run":
             write(f"{directory}/probe.gcc.{abi}.status", "0")
             write(f"{directory}/probe.cc.{abi}.compile", "")
             if mode == "no-cc":
-                write(f"{directory}/probe.cc.{abi}.unavailable", "unavailable\\n")
+                write(f"{directory}/probe.cc.{abi}.unavailable", "yes\\n")
+                write(f"{directory}/probe.cc.{abi}.stdout", "")
+                write(f"{directory}/probe.cc.{abi}.stderr", "")
+                write(f"{directory}/probe.cc.{abi}.status", "127")
             else:
+                write(f"{directory}/probe.cc.{abi}.unavailable", "no\\n")
                 write(f"{directory}/probe.cc.{abi}.stdout", native_out)
                 write(f"{directory}/probe.cc.{abi}.stderr", "")
                 write(
                     f"{directory}/probe.cc.{abi}.status",
                     "1" if mode == "native-nonzero" else "0",
                 )
+        write(f"{directory}/txn.status", "0")
         sys.exit(0)
     sys.exit(0)
 
@@ -195,7 +183,10 @@ class OracleHarness(unittest.TestCase):
 
         self.rig = self.root / "rig"
         (self.rig / "iris" / "target" / "release").mkdir(parents=True)
+        self.iris = self.rig / "iris" / "target" / "release" / "iris"
         self.iris_ci = self.rig / "iris" / "target" / "release" / "iris-ci"
+        self.iris.write_text("#!/bin/sh\nexit 0\n")
+        self.iris.chmod(0o755)
         self.socket = self.rig / "iris.sock"
         self.state = self.root / "state"
         self.state.mkdir()

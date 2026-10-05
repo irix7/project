@@ -19,8 +19,11 @@ Two further guarantees live here:
     refused before anything is written;
   * the attestation covers file types as well as content: regular files by
     SHA-256, directories, and every symlink by its immediate target and the
-    complete chain it resolves to. A dangling or looping link fails
-    validation, so a published sysroot is closed under its own links.
+    complete chain it resolves to. A looping or escaping link fails
+    validation. A dangling link is recorded with its target and an
+    unresolved marker: IRIX itself ships links for uninstalled development
+    subsets (for example X11 headers), and a faithful capture attests what
+    the guest has rather than inventing the destination.
 
 The format is documented in ``docs/oracle.md``; ``oracle.sh`` drives the CLI:
 
@@ -232,41 +235,49 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def resolve_link(root: Path, rel: str, limit: int = MAX_LINK_DEPTH) -> str | None:
-    """Follow a symlink chain to the path it terminates at, or None.
+def resolve_link(root: Path, rel: str, limit: int = MAX_LINK_DEPTH) -> tuple[str | None, str | None]:
+    """Follow a symlink chain and classify what it terminates at.
 
-    None means the chain is dangling, loops, leaves the tree or never
-    terminates within ``limit``. A chain through intermediate symlinks is
-    resolved in full, so a link to a link is complete only when the final
-    node exists.
+    Returns ``(resolved, error)``. On success ``resolved`` is the in-tree path
+    the chain terminates at and ``error`` is None. ``error`` is "dangling"
+    when the chain is well-formed but its final target is absent (IRIX ships
+    such links, e.g. for uninstalled X11/GL development subsets, and a
+    faithful capture records them), "loop" when a path repeats or the depth
+    limit is hit, and "escape" for an absolute target or one that leaves the
+    tree. A chain through intermediate symlinks is resolved in full.
     """
     seen: set[str] = set()
     current = rel
     for _ in range(limit):
         if current in seen:
-            return None
+            return None, "loop"
         seen.add(current)
         path = root / current
         if not path.is_symlink():
-            return current if path.exists() else None
+            return (current, None) if path.exists() else (None, "dangling")
         target = os.readlink(path)
         if target.startswith("/") or target.startswith("\\"):
-            return None
+            return None, "escape"
         current = posixpath.normpath(
             posixpath.join(posixpath.dirname(current), target)
         )
         if current in (".", "..") or current.startswith("../"):
-            return None
-    return None
+            return None, "escape"
+    return None, "loop"
 
 
 def _link_line(root: Path, rel: str) -> tuple[str, str | None]:
-    """The attestation line for a symlink, and the resolved path or None."""
+    """The attestation line for a symlink, and its unresolved error or None.
+
+    A dangling link is recorded with ``-`` in the resolved column: the
+    immediate target is attested even when IRIX's own tree does not carry its
+    destination.
+    """
     target = os.readlink(root / rel)
-    resolved = resolve_link(root, rel)
+    resolved, error = resolve_link(root, rel)
     if resolved is None:
-        return f"l {target} - {rel}", None
-    return f"l {target} {resolved} {rel}", resolved
+        return f"l {target} - {rel}", error
+    return f"l {target} {resolved} {rel}", None
 
 
 def attest_tree(root: str | Path) -> list[str]:
@@ -290,9 +301,9 @@ def attest_tree(root: str | Path) -> list[str]:
             path = Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
             if path.is_symlink():
-                line, resolved = _link_line(root, rel)
-                if resolved is None:
-                    problems.append(f"dangling or looping symlink: {rel}")
+                line, error = _link_line(root, rel)
+                if error not in (None, "dangling"):
+                    problems.append(f"{error} symlink: {rel}")
                 record(rel, line)
                 dirnames.remove(name)
             else:
@@ -302,9 +313,9 @@ def attest_tree(root: str | Path) -> list[str]:
             rel = path.relative_to(root).as_posix()
             st = path.lstat()
             if stat.S_ISLNK(st.st_mode):
-                line, resolved = _link_line(root, rel)
-                if resolved is None:
-                    problems.append(f"dangling or looping symlink: {rel}")
+                line, error = _link_line(root, rel)
+                if error not in (None, "dangling"):
+                    problems.append(f"{error} symlink: {rel}")
                 record(rel, line)
             elif stat.S_ISREG(st.st_mode):
                 record(rel, f"f {_sha256_file(path)} {rel}")
@@ -502,9 +513,10 @@ def _archive_legacy(oracle: Path, generations: Path, link_path: Path) -> Path | 
 def publish(oracle_dir: str | Path, capture_dir: str | Path, name: str) -> None:
     """Validate a capture and make it the current generation, atomically.
 
-    The directory is renamed into ``generations/<name>`` first; the ``sysroot``
-    and ``current`` symlinks are then swapped with a rename each. A failure
-    before the swaps leaves the previous generation and symlinks in place.
+    The directory is renamed into ``generations/<name>`` first, then the one
+    authoritative ``sysroot`` symlink is swapped with a single rename. A
+    failure before that swap leaves the previous generation, symlink and
+    legacy evidence in place; there is no second link to fall out of step.
     """
     if not valid_generation_name(name):
         raise CaptureError(f"invalid capture generation name: {name!r}")
@@ -529,13 +541,7 @@ def publish(oracle_dir: str | Path, capture_dir: str | Path, name: str) -> None:
         ) from e
 
     sysroot_link = oracle / "sysroot"
-    current_link = oracle / "current"
     tmp_sysroot = _symlink_temp(f"generations/{name}/sysroot", sysroot_link)
-    try:
-        tmp_current = _symlink_temp(f"generations/{name}", current_link)
-    except CaptureError:
-        os.unlink(tmp_sysroot)
-        raise
 
     try:
         legacy = _archive_legacy(oracle, generations, sysroot_link)
@@ -549,17 +555,11 @@ def publish(oracle_dir: str | Path, capture_dir: str | Path, name: str) -> None:
                 except OSError:
                     pass
             raise
-        os.replace(tmp_current, current_link)
     finally:
-        for tmp in (tmp_sysroot, tmp_current):
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-
-
-def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--quiet", action="store_true")
+        try:
+            os.unlink(tmp_sysroot)
+        except FileNotFoundError:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:

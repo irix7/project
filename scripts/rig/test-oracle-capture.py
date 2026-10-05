@@ -200,15 +200,15 @@ class AttestationTest(CaptureCase):
     def test_complete_chain_resolves_to_the_regular_file(self):
         root = self.build_tree()
         self.assertEqual(
-            capture.resolve_link(root, "lib/libx.so"), "lib/libx.so.1.0"
+            capture.resolve_link(root, "lib/libx.so"), ("lib/libx.so.1.0", None)
         )
 
-    def test_dangling_symlink_fails_attestation(self):
+    def test_dangling_symlink_is_attested_unresolved(self):
         root = self.root / "tree"
         root.mkdir()
         os.symlink("missing", root / "dangling")
-        with self.assertRaises(capture.CaptureError):
-            capture.attest_tree(root)
+        lines = capture.attest_tree(root)
+        self.assertIn("l missing - dangling", lines)
 
     def test_looping_symlinks_fail_attestation(self):
         root = self.root / "tree"
@@ -256,13 +256,14 @@ class FinaliseTest(CaptureCase):
             capture.finalise(cap)
         self.assertFalse((cap / "manifest.sha256").exists())
 
-    def test_dangling_symlink_fails_validation(self):
+    def test_dangling_symlink_is_attested_and_validates(self):
         cap = self.make_capture()
         (cap / "sysroot").mkdir()
         os.symlink("missing", cap / "sysroot/dangling")
         (cap / "sysroot.tar.gz").write_bytes(b"placeholder")
-        with self.assertRaises(capture.CaptureError):
-            capture.write_attestation(cap)
+        capture.write_attestation(cap)
+        attestation = (cap / "sysroot.sha256").read_text()
+        self.assertIn("l missing - dangling", attestation)
 
     def test_tampering_after_finalise_is_caught_by_validation(self):
         cap = self.make_capture()
@@ -304,9 +305,6 @@ class PublishTest(CaptureCase):
         self.assertEqual(
             os.readlink(self.oracle / "sysroot"),
             "generations/sysroot-new-stamp/sysroot",
-        )
-        self.assertEqual(
-            os.readlink(self.oracle / "current"), "generations/sysroot-new-stamp"
         )
         self.assertTrue(
             (self.oracle / "generations/sysroot-new-stamp/sysroot").is_dir()

@@ -145,6 +145,10 @@ cat >"$runner" <<'RUNNER'
 # Guest-side stdint oracle runner (issue #30). Shipped by
 # scripts/test-stdint-oracle.sh; no SGI or captured material is part of it.
 #
+# Every output file is written on every path, including the "unavailable"
+# marker, so the host transaction can require every retrieval and cannot
+# accept a partial run.
+#
 set -u
 
 dir=$1
@@ -158,91 +162,69 @@ done
 
 for abi in o32 n32; do
 	if cc -$abi -o "probe.cc.$abi" probe.c > "probe.cc.$abi.compile" 2>&1; then
+		echo no > "probe.cc.$abi.unavailable"
 		"./probe.cc.$abi" > "probe.cc.$abi.stdout" 2> "probe.cc.$abi.stderr"
 		echo $? > "probe.cc.$abi.status"
 	else
-		echo unavailable > "probe.cc.$abi.unavailable"
+		echo yes > "probe.cc.$abi.unavailable"
+		: > "probe.cc.$abi.stdout"
+		: > "probe.cc.$abi.stderr"
+		echo 127 > "probe.cc.$abi.status"
 	fi
 done
 
+echo 0 > txn.status
 exit 0
 RUNNER
 
 # --- guest transaction -----------------------------------------------------
 #
-# One transaction under the shared guest lock: setup, ship, run the runner,
-# pull every stream. Exit 91 means the guest login did not answer (an
-# unavailable oracle); any other non-zero exit is a transport failure and
-# fails closed.
+# One fail-closed transaction through scripts/lib/guest-txn.sh under the
+# shared guest lock: setup, ship, run the runner and pull every stream. The
+# login probe is separate: a guest sitting at a login prompt is an available
+# rig with an unavailable oracle, which is a skip, not a transport failure.
 
 guest_dir="/tmp/stdint-oracle-$$-$RANDOM"
-txn="$tmpdir/guest-txn.sh"
-cat >"$txn" <<'TXN'
-#!/usr/bin/env bash
-#
-# One stdint oracle guest transaction. Generated per run by
-# scripts/test-stdint-oracle.sh and executed under flock on the rig's guest
-# lock.
-#
-set -euo pipefail
 
-probe=$1
-gcc_o32=$2
-gcc_n32=$3
-runner=$4
-outdir=$5
-timeout=$6
-repo_root=$7
-guest_dir=$8
+login_status=0
+ic -q run "echo stdint-oracle-ready" --timeout "$TIMEOUT" >/dev/null ||
+	login_status=$?
+[ "$login_status" -eq 0 ] ||
+	skip "guest login did not answer on $RIG_SOCKET (the rig is up but the guest shell is not)"
 
-# shellcheck source=scripts/rig/lib.sh
-source "$repo_root/scripts/rig/lib.sh"
-
-login=0
-ic -q run "echo stdint-oracle-ready" --timeout "$timeout" >/dev/null ||
-	login=$?
-[ "$login" -eq 0 ] || exit 91
-
-ic -q run "mkdir -p $guest_dir" --timeout "$timeout" >/dev/null
-ic -q put "$probe" --to "$guest_dir/probe.c" --timeout "$timeout" >/dev/null
-ic -q put "$gcc_o32" --to "$guest_dir/probe.gcc.o32" --timeout "$timeout" >/dev/null
-ic -q put "$gcc_n32" --to "$guest_dir/probe.gcc.n32" --timeout "$timeout" >/dev/null
-ic -q put "$runner" --to "$guest_dir/stdint-oracle-run.sh" --timeout "$timeout" >/dev/null
-
-# rehash is oracle.sh's invocation style for driving cc on this guest; the
-# runner's explicit ./ paths do not depend on csh's command hash.
-ic -q run "rehash; sh $guest_dir/stdint-oracle-run.sh $guest_dir" \
-	--timeout "$timeout" >/dev/null
-
-for name in \
-	probe.gcc.o32.stdout probe.gcc.o32.stderr probe.gcc.o32.status \
-	probe.gcc.n32.stdout probe.gcc.n32.stderr probe.gcc.n32.status \
-	probe.cc.o32.stdout probe.cc.o32.stderr probe.cc.o32.status \
-	probe.cc.o32.compile probe.cc.o32.unavailable \
-	probe.cc.n32.stdout probe.cc.n32.stderr probe.cc.n32.status \
-	probe.cc.n32.compile probe.cc.n32.unavailable
-do
-	ic -q get "$guest_dir/$name" --to "$outdir/$name" \
-		--timeout "$timeout" >/dev/null 2>&1 || true
+gets=()
+for stem in probe.gcc.o32 probe.gcc.n32; do
+	for suffix in stdout stderr status; do
+		gets+=(--get "$guest_dir/$stem.$suffix" "$tmpdir/$stem.$suffix")
+	done
+done
+for stem in probe.cc.o32 probe.cc.n32; do
+	for suffix in stdout stderr status compile unavailable; do
+		gets+=(--get "$guest_dir/$stem.$suffix" "$tmpdir/$stem.$suffix")
+	done
 done
 
-ic -q run "rm -rf $guest_dir" --timeout "$timeout" >/dev/null 2>&1 || true
-exit 0
-TXN
-
 txn_status=0
-rig_with_guest_lock bash "$txn" \
-	"$PROBE" "$tmpdir/probe.gcc.o32" "$tmpdir/probe.gcc.n32" \
-	"$runner" "$tmpdir" "$TIMEOUT" "$REPO_ROOT" "$guest_dir" ||
+"$REPO_ROOT/scripts/lib/guest-txn.sh" \
+	--timeout "$TIMEOUT" \
+	--guest-dir "$guest_dir" \
+	--label "stdint oracle" \
+	--put "$PROBE" "$guest_dir/probe.c" \
+	--put "$tmpdir/probe.gcc.o32" "$guest_dir/probe.gcc.o32" \
+	--put "$tmpdir/probe.gcc.n32" "$guest_dir/probe.gcc.n32" \
+	--put "$runner" "$guest_dir/stdint-oracle-run.sh" \
+	--run "rehash; sh $guest_dir/stdint-oracle-run.sh $guest_dir" \
+	"${gets[@]}" \
+	--status "$guest_dir/txn.status" "$tmpdir/txn.status" ||
 	txn_status=$?
 
 case "$txn_status" in
 	0) ;;
-	91)
-		skip "guest login did not answer on $RIG_SOCKET (the rig is up but the guest shell is not)"
-		;;
-	*) die "guest transaction did not complete (status $txn_status); no evidence produced" ;;
+	93) skip "rig stopped answering while the stdint oracle transaction ran" ;;
+	*) die "guest transaction did not complete (status $txn_status); no evidence accepted" ;;
 esac
+
+ic -q run "rm -rf $guest_dir" --timeout "$TIMEOUT" >/dev/null 2>&1 || true
 
 # --- host-side classification ----------------------------------------------
 
@@ -250,44 +232,12 @@ esac
 # standard's exact-width, pointer-sized and greatest-width definitions. Both
 # ABIs are ILP32, so one table serves both. This is the sanity check on the
 # oracle itself (a broken or unexpected cc must not arbitrate silently); the
-# cross output is held to it through the diff below.
-EXPECTED_LINES=(
-	'sizeof(int8_t)=1'
-	'sizeof(int16_t)=2'
-	'sizeof(int32_t)=4'
-	'sizeof(int64_t)=8'
-	'sizeof(uint8_t)=1'
-	'sizeof(uint16_t)=2'
-	'sizeof(uint32_t)=4'
-	'sizeof(uint64_t)=8'
-	'sizeof(intptr_t)=4'
-	'sizeof(uintptr_t)=4'
-	'sizeof(intmax_t)=8'
-	'sizeof(uintmax_t)=8'
-	'sizeof(void*)=4'
-	'INT32_MAX=2147483647'
-	'UINT64_MAX=ffffffffffffffff'
-	'SIZE_MAX=4294967295'
-)
-
-PROBE_KEYS=(
-	'sizeof(int8_t)'
-	'sizeof(int16_t)'
-	'sizeof(int32_t)'
-	'sizeof(int64_t)'
-	'sizeof(uint8_t)'
-	'sizeof(uint16_t)'
-	'sizeof(uint32_t)'
-	'sizeof(uint64_t)'
-	'sizeof(intptr_t)'
-	'sizeof(uintptr_t)'
-	'sizeof(intmax_t)'
-	'sizeof(uintmax_t)'
-	'sizeof(void*)'
-	'INT32_MAX'
-	'UINT64_MAX'
-	'SIZE_MAX'
-)
+# cross output is held to it through the diff below. The shell and the host
+# tests read the same file so the model exists once.
+mapfile -t EXPECTED_LINES < <(grep -v '^[[:space:]]*$' "$REPO_ROOT/scripts/stdint-oracle.model")
+[ "${#EXPECTED_LINES[@]}" -gt 0 ] ||
+	die "integer model is empty: $REPO_ROOT/scripts/stdint-oracle.model"
+PROBE_KEYS=("${EXPECTED_LINES[@]%%=*}")
 
 # require_run LABEL STEM: the guest program ran and exited zero.
 require_run() {
@@ -344,30 +294,34 @@ validate_shape() {
 		fi
 	done
 
-	local -A sizes=()
-	for ((i = 0; i < 13; i++)); do
+	local -A values=()
+	for ((i = 0; i < ${#PROBE_KEYS[@]}; i++)); do
 		value=${got[i]#*=}
-		case "$value" in
-			1 | 2 | 4 | 8) ;;
-			*)
-				echo "FAIL: $label: ${PROBE_KEYS[i]} is '$value', not a byte size" >&2
-				return 1
+		values[${PROBE_KEYS[i]}]=$value
+		case "${PROBE_KEYS[i]}" in
+			sizeof\(*\))
+				case "$value" in
+					1 | 2 | 4 | 8) ;;
+					*)
+						echo "FAIL: $label: ${PROBE_KEYS[i]} is '$value', not a byte size" >&2
+						return 1
+						;;
+				esac
 				;;
 		esac
-		sizes[${PROBE_KEYS[i]}]=$value
 	done
-	[ "${sizes[sizeof(intptr_t)]}" = "${sizes[sizeof(void*)]}" ] ||
+	[ "${values[sizeof(intptr_t)]}" = "${values[sizeof(void*)]}" ] ||
 		{ echo "FAIL: $label: intptr_t is not pointer-sized" >&2; return 1; }
-	[ "${sizes[sizeof(uintptr_t)]}" = "${sizes[sizeof(void*)]}" ] ||
+	[ "${values[sizeof(uintptr_t)]}" = "${values[sizeof(void*)]}" ] ||
 		{ echo "FAIL: $label: uintptr_t is not pointer-sized" >&2; return 1; }
-	[ "${sizes[sizeof(intmax_t)]}" = "${sizes[sizeof(uintmax_t)]}" ] ||
+	[ "${values[sizeof(intmax_t)]}" = "${values[sizeof(uintmax_t)]}" ] ||
 		{ echo "FAIL: $label: intmax_t and uintmax_t disagree" >&2; return 1; }
 
-	value=${got[13]#*=}
+	value=${values[INT32_MAX]}
 	case "$value" in
 		'' | *[!0-9]*) echo "FAIL: $label: INT32_MAX is not a decimal value" >&2; return 1 ;;
 	esac
-	value=${got[14]#*=}
+	value=${values[UINT64_MAX]}
 	if [ "${#value}" -ne 16 ]; then
 		echo "FAIL: $label: UINT64_MAX is not 16 hexadecimal digits" >&2
 		return 1
@@ -375,7 +329,7 @@ validate_shape() {
 	case "$value" in
 		*[!0-9a-f]*) echo "FAIL: $label: UINT64_MAX is not lowercase hexadecimal" >&2; return 1 ;;
 	esac
-	value=${got[15]#*=}
+	value=${values[SIZE_MAX]}
 	case "$value" in
 		'' | *[!0-9]*) echo "FAIL: $label: SIZE_MAX is not a decimal value" >&2; return 1 ;;
 	esac
@@ -398,7 +352,7 @@ compare_outputs() {
 # (docs/oracle.md): that is an unavailable oracle, not a toolchain failure.
 native_unavailable=0
 for abi in o32 n32; do
-	if [ -f "$tmpdir/probe.cc.$abi.unavailable" ]; then
+	if [ "$(cat "$tmpdir/probe.cc.$abi.unavailable")" = yes ]; then
 		native_unavailable=1
 		echo "note: native MIPSpro cc could not compile the $abi probe" >&2
 		if [ -s "$tmpdir/probe.cc.$abi.compile" ]; then

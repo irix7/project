@@ -2,18 +2,21 @@
 #
 # Build the IRIX 6.5 cross toolchain.
 #
-# By default this builds the GCC 16.2 IRIX port: binutils 2.20.1 from the
-# pdaxrom lineage plus the in-repo GCC 16.2 series (patches/gcc-16.2/),
-# re-derived from pdaxrom/irix-gcc tag 1.2's 15.2 IRIX diff:
+# By default this builds the GCC 16.2 IRIX port: vanilla upstream binutils
+# 2.47 plus the in-repo GCC 16.2 series (patches/gcc-16.2/), re-derived
+# from pdaxrom/irix-gcc tag 1.2's 15.2 IRIX diff:
 #
-#   * binutils 2.20.1 with the pdaxrom IRIX patches
+#   * binutils 2.47 (GNU release, no patches; see docs/binutils.md)
 #   * GCC 16.2.0 with the in-repo IRIX series
 #   * the local patches/ deltas that a sysroot-less host needs
 #
-# `--gcc 15.3.0` (or 15.2.0) selects the fallback recipe: the pdaxrom
-# 15.2.0 IRIX diffs applied to that release plus the local patches. The
-# 15.3.0 path is the heuristic fallback documented in docs/toolchain.md;
-# the 15.2.0 path reproduces the original baseline tree.
+# `--binutils 2.20.1` selects the pdaxrom-patched seed fallback, kept
+# unchanged for bisecting and for reproducing pre-2.47 builds;
+# `--binutils 2.47` is the default. `--gcc 15.3.0` (or 15.2.0) selects the
+# GCC fallback recipe: the pdaxrom 15.2.0 IRIX diffs applied to that
+# release plus the local patches. The 15.3.0 path is the heuristic fallback
+# documented in docs/toolchain.md; the 15.2.0 path reproduces the original
+# baseline tree.
 #
 # Unlike pdaxrom's own IRIX 6.5 configuration, which builds an n32-default
 # compiler for the mips-sgi-irix6n32 triplet, this configures the canonical
@@ -47,22 +50,31 @@
 #   --sysroot DIR    target sysroot; enables libstdc++ if it is set
 #   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
 #   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
+#   --binutils VER   binutils release: 2.47 (default, vanilla) or 2.20.1
+#                    (pdaxrom patches, seed fallback)
 #   --clean          remove the work directory before building
 #   -h, --help       show this help
 #
 # Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX,
-# GCC_VERSION (overridden by --gcc) and IRIX_WORK_ROOT are honoured. The
-# work root defaults to <repo>/.scratch; the flake's `nix run` exports
-# IRIX_WORK_ROOT="$PWD/.scratch" so the default follows the caller's tree.
-# The nix devshell sets the first five.
+# GCC_VERSION (overridden by --gcc), BINUTILS_VERSION (overridden by
+# --binutils) and IRIX_WORK_ROOT are honoured. The work root defaults to
+# <repo>/.scratch; the flake's `nix run` exports IRIX_WORK_ROOT="$PWD/.scratch"
+# so the default follows the caller's tree. The nix devshell sets the first
+# five.
 #
 set -euo pipefail
 
 TARGET=mips-sgi-irix6.5
 
-BINUTILS_VERSION=2.20.1
-BINUTILS_TARBALL="binutils-${BINUTILS_VERSION}.tar.bz2"
-BINUTILS_SHA256=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64
+# GNU binutils releases this script knows how to build. 2.47 is the vanilla
+# upstream release (recipe `vanilla`, no patches); 2.20.1 is the
+# pdaxrom-patched seed fallback (recipe `pdaxrom`), kept for bisecting. The
+# sha256 values are pinned from the official release tarballs after
+# verifying them against the official sha512 list
+# (https://sourceware.org/pub/binutils/releases/sha512.sum).
+BINUTILS_VERSION=${BINUTILS_VERSION:-2.47}
+BINUTILS_SHA256_2_47=154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
+BINUTILS_SHA256_2_20_1=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64
 
 # GCC releases this script knows how to build. The sha256 values are
 # pinned against the official GNU release checksums
@@ -76,8 +88,10 @@ GCC_SHA256_15_2_0=438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d2
 PDAXROM_COMMIT=2aa3421b4b4b9f8962cdd864243d82d7a458fcff
 PDAXROM_RAW="https://raw.githubusercontent.com/pdaxrom/irix-gcc/${PDAXROM_COMMIT}/files"
 
-# name:sha256 pairs, downloaded from PDAXROM_RAW.
-BINUTILS_PATCHES=(
+# The 2.20.1 recipe's pdaxrom patches (name:sha256 pairs, downloaded from
+# PDAXROM_RAW). 2.47 is vanilla and carries none; see docs/binutils.md for
+# why the pdaxrom deltas are not ported forward without guest evidence.
+BINUTILS_2_20_1_PATCHES=(
   "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
   "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
 )
@@ -113,10 +127,11 @@ CLEAN=0
 
 usage() {
 	cat <<'EOF'
-Build the IRIX 6.5 cross toolchain (binutils 2.20.1 + GCC 16.2.0 by
+Build the IRIX 6.5 cross toolchain (binutils 2.47 + GCC 16.2.0 by
 default) targeting mips-sgi-irix6.5 with big-endian o32, n32 and n64
-multilibs. The gcc-16.2 IRIX series is in-repo; --gcc selects the 15.3.0
-or 15.2.0 pdaxrom fallback recipe.
+multilibs. Binutils 2.47 is the vanilla GNU release; --binutils 2.20.1
+selects the pdaxrom-patched seed fallback. The gcc-16.2 IRIX series is
+in-repo; --gcc selects the 15.3.0 or 15.2.0 pdaxrom fallback recipe.
 
 Usage: scripts/build-toolchain.sh [options]
 
@@ -127,13 +142,16 @@ Usage: scripts/build-toolchain.sh [options]
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
+  --binutils VER   binutils release: 2.47 (default, vanilla) or 2.20.1
+                   (pdaxrom patches, seed fallback)
   --clean          remove the work directory before building
   -h, --help       show this help
 
 Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX,
-GCC_VERSION (overridden by --gcc) and IRIX_WORK_ROOT are honoured. The work
-root defaults to <repo>/.scratch; the flake exports
-IRIX_WORK_ROOT="$PWD/.scratch" so nix run follows the caller's tree.
+GCC_VERSION (overridden by --gcc), BINUTILS_VERSION (overridden by
+--binutils) and IRIX_WORK_ROOT are honoured. The work root defaults to
+<repo>/.scratch; the flake exports IRIX_WORK_ROOT="$PWD/.scratch" so nix
+run follows the caller's tree.
 EOF
 }
 
@@ -154,11 +172,36 @@ parse_args() {
 			--sysroot) IRIX_SYSROOT=$2; shift 2 ;;
 			--languages) LANGUAGES=$2; shift 2 ;;
 			--gcc) GCC_VERSION=$2; shift 2 ;;
+			--binutils) BINUTILS_VERSION=$2; shift 2 ;;
 			--clean) CLEAN=1; shift ;;
 			-h|--help) usage; exit 0 ;;
 			*) die "unknown option: $1 (try --help)" ;;
 		esac
 	done
+}
+
+# resolve_binutils_recipe: 2.47 is the vanilla upstream release; 2.20.1 is
+# the pdaxrom-patched seed fallback. The tarball name, pinned sha256, recipe
+# name and patch list are per release, so identity and reuse distinguish
+# them.
+resolve_binutils_recipe() {
+	case "$BINUTILS_VERSION" in
+		2.47)
+			BINUTILS_SHA256=$BINUTILS_SHA256_2_47
+			BINUTILS_RECIPE=vanilla
+			BINUTILS_TARBALL=binutils-2.47.tar.xz
+			BINUTILS_PATCHES=()
+			;;
+		2.20.1)
+			BINUTILS_SHA256=$BINUTILS_SHA256_2_20_1
+			BINUTILS_RECIPE=pdaxrom
+			BINUTILS_TARBALL=binutils-2.20.1.tar.bz2
+			BINUTILS_PATCHES=("${BINUTILS_2_20_1_PATCHES[@]}")
+			;;
+		*)
+			die "unsupported binutils version: ${BINUTILS_VERSION} (known: 2.47, 2.20.1)"
+			;;
+	esac
 }
 
 # resolve_recipe: 16.2.0 is the in-repo series; 15.3.0 and 15.2.0 use the
@@ -282,12 +325,14 @@ extract() {
 }
 
 # binutils_identity CONFIGURE-ARGS...: the full requested identity, including
-# the pinned patch checksums so it is knowable without a download.
+# the pinned patch checksums so it is knowable without a download. Version,
+# tarball sha256, recipe and patch digests all participate, so a changed
+# --binutils or a changed patch never reuses another release's stamp.
 binutils_identity() {
 	printf 'component=binutils\n'
 	printf 'version=%s\n' "$BINUTILS_VERSION"
 	printf 'tarball_sha256=%s\n' "$BINUTILS_SHA256"
-	printf 'recipe=pdaxrom\n'
+	printf 'recipe=%s\n' "$BINUTILS_RECIPE"
 	printf 'patches:\n'
 	irix_pinned_patch_identity "${BINUTILS_PATCHES[@]}"
 	printf 'configure:\n'
@@ -348,13 +393,15 @@ build_binutils() {
 		return 0
 	fi
 
-	note "binutils ${BINUTILS_VERSION}"
+	note "binutils ${BINUTILS_VERSION} (${BINUTILS_RECIPE} recipe)"
 	fetch "https://ftp.gnu.org/gnu/binutils/${BINUTILS_TARBALL}" \
 		"${DOWNLOADS}/${BINUTILS_TARBALL}" "$BINUTILS_SHA256"
-	fetch_patches "${BINUTILS_PATCHES[@]}"
 	extract "${DOWNLOADS}/${BINUTILS_TARBALL}" "binutils-${BINUTILS_VERSION}"
 	local src="${SRC_DIR}/binutils-${BINUTILS_VERSION}"
-	irix_apply_patches "$src" "${PATCH_FILES[@]}"
+	if [ "$BINUTILS_RECIPE" = pdaxrom ]; then
+		fetch_patches "${BINUTILS_PATCHES[@]}"
+		irix_apply_patches "$src" "${PATCH_FILES[@]}"
+	fi
 
 	irix_configure_and_make "$src" "${BUILD_DIR}/binutils" \
 		"${LOGS}/binutils.log" "$identity" "${args[@]}"
@@ -450,11 +497,13 @@ build_gcc() {
 main() {
 	parse_args "$@"
 	resolve_recipe
+	resolve_binutils_recipe
 	prepare_work_dir
 	check_version_conflicts
 
 	note "IRIX 6.5 cross toolchain"
 	echo "    target:   ${TARGET}"
+	echo "    binutils: ${BINUTILS_VERSION} (${BINUTILS_RECIPE} recipe)"
 	echo "    gcc:      ${GCC_VERSION} (${GCC_RECIPE} recipe)"
 	echo "    work dir: ${WORK_DIR}"
 	echo "    prefix:   ${PREFIX}"

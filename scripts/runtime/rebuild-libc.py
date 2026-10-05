@@ -530,71 +530,84 @@ def build_csu(tree: Path, sysroot: Path, gccdir: str, shims: Path, out: Path, gc
 # ---------------------------------------------------------------------------
 
 
-# The same guest transaction shape as smoke.sh: mkdir, put, run through sh
-# with the program's status written to a file, get all three streams. Kept as
-# a template here so this proof owns its guest files and cannot disturb the
-# smoke harness's.
-GUEST_TXN = r"""#!/usr/bin/env bash
-set -euo pipefail
-
-binary=$1
-guest_bin=$2
-host_out=$3
-host_err=$4
-host_status=$5
-timeout=$6
-repo_root=$7
-
-# shellcheck source=scripts/rig/lib.sh
-source "$repo_root/scripts/rig/lib.sh"
-
-ic -q run "mkdir -p /tmp/runtime" --timeout "$timeout" >/dev/null
-ic -q put "$binary" --to "$guest_bin" --timeout "$timeout" >/dev/null
-run_status=0
-ic -q run "sh -c 'chmod +x $guest_bin; $guest_bin > $guest_bin.stdout 2> $guest_bin.stderr; echo \$? > $guest_bin.status'" \
-	--timeout "$timeout" >/dev/null || run_status=$?
-ic -q get "$guest_bin.stdout" --to "$host_out" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.stderr" --to "$host_err" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.status" --to "$host_status" --timeout "$timeout" >/dev/null || true
-[ "$run_status" -eq 0 ] || exit 90
-exit 0
-"""
+# The fail-closed guest transaction shared with smoke.sh (issue #5, audit
+# C10). It takes the rig's shared guest lock itself, clears host evidence
+# before retrieval and fails on any failed put/run/get/mkdir call, so this
+# driver only checks the transaction's status before reading its result
+# files; an old result from an earlier attempt can never be read as this
+# one's.
+GUEST_TXN = HERE.parent / "lib" / "guest-txn.sh"
+GUEST_BIN = "/tmp/runtime/hello-static"
 
 
 def run_on_guest(binary: Path, out: Path, timeout: int) -> tuple:
-    txn = out / "guest-txn.sh"
-    txn.write_text(GUEST_TXN)
     host_out = out / "hello.stdout"
     host_err = out / "hello.stderr"
     host_status = out / "hello.status"
-    guest_bin = "/tmp/runtime/hello-static"
-    # lib.sh's shared guest lock, same path and timeout precedence, so this
-    # serialises with smoke.sh and the reference builds.
-    rig_dir = os.environ.get("IRIX_RIG_DIR", "/mnt/europa/sgi-toolchain-scratch/rig")
-    lock = os.environ.get("RIG_GUEST_LOCK") or f"{rig_dir}/guest.lock"
+    # Attempt-specific host evidence: the previous attempt's files are
+    # removed before the transaction, not merely overwritten by a successful
+    # get.
+    for stale in (host_out, host_err, host_status):
+        stale.unlink(missing_ok=True)
     proc = run(
         [
-            "flock",
-            "-w",
-            os.environ.get("RIG_GUEST_LOCK_TIMEOUT", "3600"),
-            lock,
             "bash",
-            txn,
+            GUEST_TXN,
+            "--label",
+            "runtime",
+            "--guest-dir",
+            "/tmp/runtime",
+            "--put",
             binary,
-            guest_bin,
+            GUEST_BIN,
+            "--streams",
+            GUEST_BIN,
             host_out,
             host_err,
             host_status,
+            "--timeout",
             str(timeout),
-            str(REPO_ROOT),
         ],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        raise BuildError(f"guest transaction failed ({proc.returncode}):\n{proc.stderr}")
+        raise BuildError(
+            f"guest transaction failed ({proc.returncode}):\n{proc.stderr.strip()}"
+        )
+    require(host_out.is_file(), f"guest transaction lost stdout evidence: {host_out}")
+    require(host_err.is_file(), f"guest transaction lost stderr evidence: {host_err}")
+    require(
+        host_status.is_file(), f"guest transaction lost status evidence: {host_status}"
+    )
     status = host_status.read_text().strip()
+    require(
+        re.fullmatch(r"[0-9]+", status) is not None,
+        f"guest status is not a non-negative integer: {status!r}",
+    )
     return status, host_out, host_err
+
+
+def static_elf_proof(readelf: str, binary: Path) -> str:
+    """The static-link ELF inspection, fail-closed (issue #5, audit C10).
+
+    readelf's own exit status is the inspection's success signal: an empty or
+    truncated stream from a failed run must never count as proof that
+    PT_INTERP and NEEDED are absent.
+    """
+    proc = run([readelf, "-h", "-l", "-d", binary], capture_output=True, text=True)
+    require(
+        proc.returncode == 0,
+        f"readelf failed on {binary} (exit {proc.returncode}):\n{proc.stderr.strip()}",
+    )
+    proof = proc.stdout
+    require(
+        proof.strip() != "",
+        f"readelf produced no output for {binary}; absence of PT_INTERP/NEEDED not proven",
+    )
+    require("INTERP" not in proof, "static binary has a PT_INTERP")
+    require("NEEDED" not in proof, "static binary has a NEEDED entry")
+    return proof
 
 
 # ---------------------------------------------------------------------------
@@ -791,10 +804,8 @@ def main(argv=None) -> int:
     proc = run(link_cmd, capture_output=True, text=True)
     require(proc.returncode == 0, f"static link failed:\n{proc.stderr}")
 
-    proof = run([readelf, "-h", "-l", "-d", hello], capture_output=True, text=True).stdout
+    proof = static_elf_proof(str(readelf), hello)
     (out / "readelf.txt").write_text(proof)
-    require("INTERP" not in proof, "static binary has a PT_INTERP")
-    require("NEEDED" not in proof, "static binary has a NEEDED entry")
     log(f"linked {hello} ({hello.stat().st_size} bytes), no PT_INTERP, no NEEDED")
 
     if args.no_run:

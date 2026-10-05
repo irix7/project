@@ -40,8 +40,11 @@ nix develop --command python3 scripts/runtime/rebuild-libc.py \
 compile; `--prefix`, `--sysroot`, `--out` and `--timeout` mirror the other
 harnesses. Every artefact lands under `.scratch/runtime/` (or `--out`); the
 generated sources, objects, archives, logs and the guest's output stay there
-and are never committed (ADR-0001). The guest transaction takes the rig's
-shared guest lock, so it serialises with `smoke.sh` and the reference builds.
+and are never committed (ADR-0001). The guest phase is smoke.sh's fail-closed
+transaction (`scripts/lib/guest-txn.sh`, issue #5): it takes the rig's shared
+guest lock, checks every transport stage, clears host result files before
+retrieval and requires a numeric status, so it serialises with the reference
+builds and cannot accept stale evidence.
 
 ## Why this source set
 
@@ -207,8 +210,18 @@ Host-only tests for the build's pure pieces:
 ```sh
 python3 scripts/runtime/test-smake.py          # the smake evaluator
 python3 scripts/runtime/test-compat.py         # the construct translations
-python3 scripts/runtime/test-rebuild-libc.py   # the driver's flag/selection logic
+python3 scripts/runtime/test-rebuild-libc.py   # flags, the guest retrieval contract and the ELF proof
 ```
+
+The guest phase and the readelf proof are fail-closed (issue #5, audit C10):
+retrieval is the shared `scripts/lib/guest-txn.sh` transaction, host result
+files are cleared before it runs, every retrieve is required, the status must
+be a non-negative integer, and a readelf run whose exit status is non-zero or
+whose output is empty cannot count as proof of the static shape.
+`test-rebuild-libc.py` injects each of those failures through the fake rig
+without a guest; the controlled rerun of the whole driver is the acceptance
+evidence and stays under `.scratch/runtime/`, recorded separately from the
+host fault tests.
 
 Evidence from the acceptance run (`.scratch/runtime/`): the generated tree,
 the per-source objects, `libc.a`, `libm.a`, `csu/`, `hello-static`,

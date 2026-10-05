@@ -29,9 +29,12 @@
 #
 # Preconditions, each failing non-zero with a clear message: source/expected
 # files exist, the cross exists, its sysroot is configured and non-empty with
-# headers, and the rig answers. The whole guest transaction (mkdir + put +
-# run + get) runs under lib.sh's shared guest lock, so the harness serialises
-# with any client that takes the same lock; guest files live under /tmp/smoke.
+# headers, and the rig answers. The guest transaction (mkdir + put + run +
+# get) is scripts/lib/guest-txn.sh's fail-closed contract, which runs under
+# lib.sh's shared guest lock: every stage is checked, host evidence is cleared
+# before retrieval, and the guest status file must be a non-negative integer.
+# A non-zero transaction status always fails the harness, whatever files
+# exist; see docs/smoke.md, "Fail-closed guest transaction".
 #
 set -euo pipefail
 
@@ -159,66 +162,35 @@ grep -q 'INTERP' "$tmpdir/phdr" ||
 	die "linked binary is not dynamically linked (no PT_INTERP); ADR-0006 requires the dynamic model"
 
 # The guest transaction is one unit: setup, ship, run, retrieve. It runs
-# under the rig's guest lock so concurrent clients (agents, later milestones)
-# cannot interleave commands or clobber /tmp/smoke.
+# under the rig's shared guest lock (taken inside guest-txn.sh) so concurrent
+# clients cannot interleave commands, and every transport stage is
+# fail-closed. The guest file name is attempt-specific, so stale evidence
+# from an earlier attempt cannot be mistaken for this one's.
 guest_name="smoke-$$-$RANDOM"
 guest_bin="/tmp/smoke/$guest_name"
 host_out="$tmpdir/${stem}.stdout"
 host_err="$tmpdir/${stem}.stderr"
 host_status="$tmpdir/${stem}.status"
 
-txn="$tmpdir/guest-txn.sh"
-cat >"$txn" <<'TXN'
-#!/usr/bin/env bash
-#
-# One smoke-harness guest transaction. Generated per run by scripts/smoke.sh
-# and executed under flock on $RIG_DIR/guest.lock.
-#
-set -euo pipefail
-
-binary=$1
-guest_bin=$2
-host_out=$3
-host_err=$4
-host_status=$5
-timeout=$6
-repo_root=$7
-
-# shellcheck source=scripts/rig/lib.sh
-source "$repo_root/scripts/rig/lib.sh"
-
-ic -q run "mkdir -p /tmp/smoke" --timeout "$timeout" >/dev/null
-ic -q put "$binary" --to "$guest_bin" --timeout "$timeout" >/dev/null
-
-# Run through sh so stdout and stderr can be captured separately (csh's
-# redirections differ) and so the program's own exit status can be written to
-# a file: iris-ci only reports its own status, and on guest failure it prints
-# the command rather than the program's stdout. sh creates the redirection
-# targets before exec, so the files exist even when the program cannot start;
-# the trailing echo always runs and leaves the true status behind.
-run_status=0
-ic -q run "sh -c 'chmod +x $guest_bin; $guest_bin > $guest_bin.stdout 2> $guest_bin.stderr; echo \$? > $guest_bin.status'" \
-	--timeout "$timeout" >/dev/null || run_status=$?
-
-ic -q get "$guest_bin.stdout" --to "$host_out" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.stderr" --to "$host_err" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.status" --to "$host_status" --timeout "$timeout" >/dev/null || true
-
-# A non-zero iris-ci status means the transaction broke, not the program;
-# 90 tells smoke.sh the difference.
-[ "$run_status" -eq 0 ] || exit 90
-exit 0
-TXN
-
 txn_status=0
-rig_with_guest_lock bash "$txn" \
-	"$binary" "$guest_bin" "$host_out" "$host_err" "$host_status" "$TIMEOUT" "$REPO_ROOT" ||
+bash "$REPO_ROOT/scripts/lib/guest-txn.sh" \
+	--label "smoke $$" \
+	--guest-dir /tmp/smoke \
+	--put "$binary" "$guest_bin" \
+	--streams "$guest_bin" "$host_out" "$host_err" "$host_status" \
+	--timeout "$TIMEOUT" ||
 	txn_status=$?
 
-# Missing stream or status files mean the transaction itself broke (ship or
-# retrieve), not that the program printed nothing: sh creates them before exec.
-[ -f "$host_out" ] && [ -f "$host_status" ] ||
-	die "guest transaction did not complete (status $txn_status); messages above"
+# The transaction's own status is checked before any evidence is read: a
+# failed put, run or get fails the harness even if matching output exists.
+# The guest programme's status is separate data in the status file.
+if [ "$txn_status" -ne 0 ]; then
+	die "guest transaction failed (status $txn_status); messages above"
+fi
+
+for stream in "$host_out" "$host_err" "$host_status"; do
+	[ -f "$stream" ] || die "guest transaction lost required evidence: $stream"
+done
 
 guest_rc=$(cat "$host_status")
 case "$guest_rc" in

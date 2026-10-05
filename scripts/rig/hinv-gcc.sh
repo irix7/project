@@ -217,15 +217,20 @@ cat "$OUT/hinv.link.log"
 
 # Dynamic by design (ADR-0006), and n32/mips3 by the tree's default. This is
 # the same PT_INTERP proof smoke.sh uses; the ELF shape is then recorded
-# beside the native reference's for triage.
-"$READELF" -h -l -d -S "$BIN" >"$OUT/hinv.readelf.txt"
+# beside the native reference's for triage. A failed readelf run is fatal: an
+# empty failure output must never count as proof of anything.
+if ! "$READELF" -h -l -d -S "$BIN" >"$OUT/hinv.readelf.txt"; then
+	rm -f "$OUT/hinv.readelf.txt"
+	die "readelf failed on $BIN; ELF proof not available"
+fi
 grep -q 'INTERP' "$OUT/hinv.readelf.txt" ||
 	die "linked binary is not dynamically linked (no PT_INTERP); ADR-0006 requires the dynamic model"
 grep -q 'Class:.*ELF32' "$OUT/hinv.readelf.txt" || die "not ELF32: n32 expected"
 grep -q "big endian" "$OUT/hinv.readelf.txt" || die "not big-endian"
 grep -q 'abi2' "$OUT/hinv.readelf.txt" || die "no EF_MIPS_ABI2 in flags: n32 expected"
 grep -q 'mips3' "$OUT/hinv.readelf.txt" || die "not MIPS III in flags: -mips3 expected"
-"$READELF" -h -S "$OBJ" >"$OUT/hinv.o.readelf.txt"
+"$READELF" -h -S "$OBJ" >"$OUT/hinv.o.readelf.txt" ||
+	die "readelf failed on $OBJ; object ELF shape not available"
 
 ref_bin="$ORACLE_DIR/hinv-reference/hinv"
 ref_obj="$ORACLE_DIR/hinv-reference/hinv.o"
@@ -274,56 +279,31 @@ file "\$B" > "\$B.file" 2>&1
 RUN
 chmod +x "$runner"
 
-# The same one-transaction shape as smoke.sh: setup, ship, run, then pull
-# every stream. It runs under the rig's guest lock so it serialises with every
-# other client.
-txn="$OUT/guest-txn.sh"
-cat >"$txn" <<'TXN'
-#!/usr/bin/env bash
-#
-# One hinv-gcc guest transaction. Generated per run by scripts/rig/hinv-gcc.sh
-# and executed under flock on $RIG_DIR/guest.lock.
-#
-set -euo pipefail
-
-binary=$1
-guest_bin=$2
-host_out=$3
-host_err=$4
-host_status=$5
-host_file=$6
-timeout=$7
-repo_root=$8
-runner=$9
-
-# shellcheck source=scripts/rig/lib.sh
-source "$repo_root/scripts/rig/lib.sh"
-
-ic -q run "mkdir -p /tmp/hinv-gcc" --timeout "$timeout" >/dev/null
-ic -q put "$binary" --to "$guest_bin" --timeout "$timeout" >/dev/null
-ic -q put "$runner" --to "$guest_bin.run" --timeout "$timeout" >/dev/null
-
-run_status=0
-ic -q run "sh $guest_bin.run" --timeout "$timeout" >/dev/null || run_status=$?
-
-ic -q get "$guest_bin.stdout" --to "$host_out" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.stderr" --to "$host_err" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.status" --to "$host_status" --timeout "$timeout" >/dev/null || true
-ic -q get "$guest_bin.file" --to "$host_file" --timeout "$timeout" >/dev/null || true
-
-[ "$run_status" -eq 0 ] || exit 90
-exit 0
-TXN
-
-rm -f "$host_out" "$host_err" "$host_status" "$host_file"
+# The fail-closed transaction smoke.sh and the runtime driver share: every
+# stage checked, host evidence cleared before retrieval, the guest status
+# required and numeric. It takes the rig's guest lock itself, so it
+# serialises with every other client.
 txn_status=0
-rig_with_guest_lock bash "$txn" \
-	"$BIN" "$guest_bin" "$host_out" "$host_err" "$host_status" "$host_file" \
-	"$TIMEOUT" "$REPO_ROOT" "$runner" ||
+bash "$REPO_ROOT/scripts/lib/guest-txn.sh" \
+	--label "hinv-gcc $$" \
+	--guest-dir /tmp/hinv-gcc \
+	--put "$BIN" "$guest_bin" \
+	--put "$runner" "$guest_bin.run" \
+	--run "sh $guest_bin.run" \
+	--get "$guest_bin.stdout" "$host_out" \
+	--get "$guest_bin.stderr" "$host_err" \
+	--get "$guest_bin.file" "$host_file" \
+	--status "$guest_bin.status" "$host_status" \
+	--timeout "$TIMEOUT" ||
 	txn_status=$?
 
-[ -f "$host_out" ] && [ -f "$host_status" ] ||
-	die "guest transaction did not complete (status $txn_status); messages above"
+if [ "$txn_status" -ne 0 ]; then
+	die "guest transaction failed (status $txn_status); messages above"
+fi
+
+for stream in "$host_out" "$host_err" "$host_status" "$host_file"; do
+	[ -f "$stream" ] || die "guest transaction lost required evidence: $stream"
+done
 
 guest_rc=$(cat "$host_status")
 case "$guest_rc" in

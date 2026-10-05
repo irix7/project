@@ -15,18 +15,23 @@ keeps GCC's GPL; no SGI or licence-restricted material is published
 ```sh
 nix develop --command bash -c \
 	'scripts/build-toolchain.sh \
-		--work-dir .scratch/toolchain-16.2 \
 		--sysroot /mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot \
 		--languages c'
 
-scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2/prefix \
+scripts/verify-toolchain.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--gcc-version 16.2.0
 ```
 
 That builds binutils 2.20.1 and GCC 16.2.0 into
-`.scratch/toolchain-16.2/prefix`, configured against the captured 6.5.7m
+`.scratch/toolchain-16.2.0/prefix`, configured against the captured 6.5.7m
 sysroot with big-endian o32, n32 and n64 multilibs and o32 as the default
-ABI (ADR-0003). `--languages c` is all the smoke harness needs; adding
+ABI (ADR-0003). The default work directory is version-separated:
+`<work root>/toolchain-<gcc version>`, where the work root is
+`IRIX_WORK_ROOT` when set and `<repo>/.scratch` otherwise. The flake's
+`nix run` exports `IRIX_WORK_ROOT="$PWD/.scratch"`, so it follows the
+caller's tree and `nix run . -- --gcc 15.3.0` lands in
+`.scratch/toolchain-15.3.0`; an explicit `--work-dir` always wins.
+`--languages c` is all the smoke harness needs; adding
 `c,c++` builds the libstdc++ IRIX layer as well, which is carried for the
 C++ deliverable but not exercised by the C-only acceptance (issue #6). A
 `c,c++` build currently stops at libstdc++'s n64 multilib configure because
@@ -37,9 +42,9 @@ unaffected.
 The smoke harness then proves the dynamic path in the guest (ADR-0006):
 
 ```sh
-scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix \
+scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
 	--cflags "-lm" oracle/hello.c scripts/smoke/hello.expected
-scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix --abi n32 \
+scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
 	--cflags "-lm" oracle/hello.c scripts/smoke/hello.expected
 ```
 
@@ -65,10 +70,47 @@ sha512 list
 Binutils stays 2.20.1 with the two pdaxrom patches; GCC 16.2 did not force
 a change there.
 
-The work directory defaults to `.scratch/toolchain-<gcc version>` so a
+The work directory defaults to `<work root>/toolchain-<gcc version>` so a
 default build can never overwrite another version's tree, in particular the
-original `.scratch/toolchain` 15.2 baseline. `--work-dir` and `--prefix`
-still override both.
+original `.scratch/toolchain` 15.2 baseline. The work root is
+`IRIX_WORK_ROOT` when set (the flake app exports `$PWD/.scratch`) and
+`<repo>/.scratch` otherwise. `--work-dir` and `--prefix` still override
+both.
+
+## Resumption and build identity
+
+Resume state is bound to the bytes that produced it (issue #26). A build
+is reused only when the script can prove all of the following still match:
+
+- the component and GCC version, the pinned tarball sha256 and the recipe
+  (`series`, `pdaxrom`);
+- the sha256 of every patch in apply order (in-repo patches hashed from
+  their bytes, remote patches from their pinned checksums, so identity is
+  knowable without a download);
+- the languages, configure arguments and sysroot path;
+- the actual installed tools: both completions record the `--version`
+  output of `${PREFIX}/bin/mips-sgi-irix6.5-as` and `-ld` (binutils) or
+  `-gcc` (GCC), and reuse also re-runs those tools to check they still
+  report it.
+
+Each component's completion record is
+`stamps/<component>.installed.identity` plus `.output`; a stamp without a
+matching identity or captured output is a partial build and is completed
+(down to a full reconfigure when the requested inputs changed) rather than
+trusted. `configure_and_make` records the same identity beside the build
+tree, so a changed patch, option or source wipes the configured tree
+instead of reusing stale objects.
+
+Applied patches keep a copy of their bytes at
+`<src>/.irix-patched.d/<name>.applied` and their sha256 in `<name>.sha256`.
+A same-named patch whose bytes changed is reversed from the stored copy
+and the new bytes applied; when the stored bytes cannot be reversed (or an
+old filename-only marker has unknown bytes) the script fails and asks for
+`--clean`. It never silently keeps the old patch applied, and never
+reports an old installed compiler as the new release. Building a different
+`--gcc` in a work directory that holds another release's stamps, sources,
+tarball or installed compiler fails by name and suggests the
+version-separated default or `--clean`.
 
 ## Series layout and provenance
 
@@ -119,8 +161,9 @@ re-derivations against 16.2 were:
   the whole series applies to the pristine 16.2 tarball with no rejects.
 
 The series applies with `patch -p1` from the `gcc-16.2.0` source root, in
-`series` order; `build-toolchain.sh` does that with per-patch markers so a
-re-run skips what is already applied.
+`series` order; `build-toolchain.sh` records the applied bytes and their
+sha256 per patch, so a re-run skips what is already applied and a changed
+patch is reversed and reapplied (see *Resumption and build identity*).
 
 ## The 15.3.0 fallback (and 15.2.0 baseline)
 
@@ -157,6 +200,7 @@ The guest-free harness logic keeps its unit tests:
 
 ```sh
 python3 scripts/smoke/test-smoke.py
+python3 scripts/lib/test-build-identity.py   # resumption identity, fake tools only
 ```
 
 Issue #6's evidence (pinned checksums, porting notes, build logs, verify

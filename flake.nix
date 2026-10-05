@@ -71,8 +71,8 @@
               export MPC_PREFIX=${env.MPC_PREFIX}
               export ISL_PREFIX=${env.ISL_PREFIX}
               export SSL_CERT_FILE=${env.SSL_CERT_FILE}
-              exec ${pkgs.bash}/bin/bash ${self}/scripts/build-toolchain.sh \
-                --work-dir "$PWD/.scratch/toolchain-16.2" "$@"
+              export IRIX_WORK_ROOT="$PWD/.scratch"
+              exec ${pkgs.bash}/bin/bash ${self}/scripts/build-toolchain.sh "$@"
             '';
           };
         };

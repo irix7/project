@@ -21,6 +21,16 @@
 # environment, per ADR-0003). The n32-default patch is therefore not
 # applied; -mabi=32/-mabi=n32/-mabi=64 still select all three multilibs.
 #
+# Resumption is bound to identity (issue #26): each component's completion
+# stamp records the pinned tarball sha256, the digest of every patch in
+# apply order, the recipe, languages, configure arguments, sysroot and the
+# actual `--version` output of the installed tools. A stamp is reused only
+# while all of that still matches; a changed patch, option or installed
+# tool rebuilds. Applied patches keep a copy of their bytes so a same-named
+# patch whose bytes changed is reversed before the new bytes are applied.
+# A work directory holding another GCC release is refused rather than
+# reusing its configured source.
+#
 # No SGI or licence-restricted material is downloaded or installed; a target
 # sysroot is optional and supplied by the caller with IRIX_SYSROOT. With one,
 # binutils is configured with the matching --with-sysroot so the cross's links
@@ -31,7 +41,7 @@
 # Usage: scripts/build-toolchain.sh [options]
 #
 #   --work-dir DIR   scratch space for sources, builds and logs
-#                    (default: <repo>/.scratch/toolchain-<gcc version>)
+#                    (default: <work root>/toolchain-<gcc version>)
 #   --prefix DIR     installation prefix (default: <work-dir>/prefix)
 #   --jobs N         parallel make jobs (default: number of CPUs)
 #   --sysroot DIR    target sysroot; enables libstdc++ if it is set
@@ -40,9 +50,11 @@
 #   --clean          remove the work directory before building
 #   -h, --help       show this help
 #
-# Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX and
-# GCC_VERSION (overridden by --gcc) are honoured. The nix devshell sets the
-# first five.
+# Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX,
+# GCC_VERSION (overridden by --gcc) and IRIX_WORK_ROOT are honoured. The
+# work root defaults to <repo>/.scratch; the flake's `nix run` exports
+# IRIX_WORK_ROOT="$PWD/.scratch" so the default follows the caller's tree.
+# The nix devshell sets the first five.
 #
 set -euo pipefail
 
@@ -78,6 +90,9 @@ GCC_15X_PATCHES=(
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
+# shellcheck source=scripts/lib/build-identity.sh
+source "${SCRIPT_DIR}/lib/build-identity.sh"
+
 # The in-repo GCC 16.2 series; see patches/gcc-16.2/series and docs/toolchain.md.
 GCC_SERIES_DIR=${REPO_ROOT}/patches/gcc-16.2
 
@@ -106,7 +121,7 @@ or 15.2.0 pdaxrom fallback recipe.
 Usage: scripts/build-toolchain.sh [options]
 
   --work-dir DIR   scratch space for sources, builds and logs
-                   (default: <repo>/.scratch/toolchain-<gcc version>)
+                   (default: <work root>/toolchain-<gcc version>)
   --prefix DIR     installation prefix (default: <work-dir>/prefix)
   --jobs N         parallel make jobs (default: number of CPUs)
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
@@ -115,85 +130,115 @@ Usage: scripts/build-toolchain.sh [options]
   --clean          remove the work directory before building
   -h, --help       show this help
 
-Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX and
-GCC_VERSION (overridden by --gcc) are honoured. The nix devshell sets the
-first five.
+Environment: CC, CXX, GMP_PREFIX, MPFR_PREFIX, MPC_PREFIX, ISL_PREFIX,
+GCC_VERSION (overridden by --gcc) and IRIX_WORK_ROOT are honoured. The work
+root defaults to <repo>/.scratch; the flake exports
+IRIX_WORK_ROOT="$PWD/.scratch" so nix run follows the caller's tree.
 EOF
 }
 
 die() {
-	echo "error: $*" >&2
-	exit 1
+	irix_die "$@"
 }
 
 note() {
 	printf '\n==> %s\n' "$*"
 }
 
-while [ $# -gt 0 ]; do
-	case "$1" in
-		--work-dir) WORK_DIR=$2; shift 2 ;;
-		--prefix) PREFIX=$2; shift 2 ;;
-		--jobs) JOBS=$2; shift 2 ;;
-		--sysroot) IRIX_SYSROOT=$2; shift 2 ;;
-		--languages) LANGUAGES=$2; shift 2 ;;
-		--gcc) GCC_VERSION=$2; shift 2 ;;
-		--clean) CLEAN=1; shift ;;
-		-h|--help) usage; exit 0 ;;
-		*) die "unknown option: $1 (try --help)" ;;
-	esac
-done
-
-# Resolve the GCC recipe: 16.2.0 is the in-repo series, 15.3.0 and 15.2.0
-# use the pdaxrom 15.2.0 diffs.
-case "$GCC_VERSION" in
-	16.2.0)
-		GCC_SHA256=$GCC_SHA256_16_2_0
-		GCC_RECIPE=series
-		;;
-	15.3.0)
-		GCC_SHA256=$GCC_SHA256_15_3_0
-		GCC_RECIPE=pdaxrom
-		;;
-	15.2.0)
-		GCC_SHA256=$GCC_SHA256_15_2_0
-		GCC_RECIPE=pdaxrom
-		;;
-	*)
-		die "unsupported GCC version: ${GCC_VERSION} (known: 16.2.0, 15.3.0, 15.2.0)"
-		;;
-esac
-GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
-WORK_DIR=${WORK_DIR:-${REPO_ROOT}/.scratch/toolchain-${GCC_VERSION}}
-
-if [ "$CLEAN" -eq 1 ]; then
-	rm -rf "$WORK_DIR"
-fi
-
-mkdir -p "$WORK_DIR"
-WORK_DIR=$(cd "$WORK_DIR" && pwd)
-PREFIX=${PREFIX:-${WORK_DIR}/prefix}
-mkdir -p "$PREFIX"
-PREFIX=$(cd "$PREFIX" && pwd)
-
-if [ -n "$IRIX_SYSROOT" ]; then
-	[ -d "$IRIX_SYSROOT" ] || die "sysroot not found: $IRIX_SYSROOT"
-	IRIX_SYSROOT=$(cd "$IRIX_SYSROOT" && pwd)
-fi
-[ -n "$LANGUAGES" ] || {
-	if [ -n "$IRIX_SYSROOT" ]; then LANGUAGES=c,c++; else LANGUAGES=c; fi
+parse_args() {
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--work-dir) WORK_DIR=$2; shift 2 ;;
+			--prefix) PREFIX=$2; shift 2 ;;
+			--jobs) JOBS=$2; shift 2 ;;
+			--sysroot) IRIX_SYSROOT=$2; shift 2 ;;
+			--languages) LANGUAGES=$2; shift 2 ;;
+			--gcc) GCC_VERSION=$2; shift 2 ;;
+			--clean) CLEAN=1; shift ;;
+			-h|--help) usage; exit 0 ;;
+			*) die "unknown option: $1 (try --help)" ;;
+		esac
+	done
 }
 
-DOWNLOADS=${WORK_DIR}/downloads
-SRC_DIR=${WORK_DIR}/src
-BUILD_DIR=${WORK_DIR}/build
-LOGS=${WORK_DIR}/logs
-STAMPS=${WORK_DIR}/stamps
-mkdir -p "$DOWNLOADS" "$SRC_DIR" "$BUILD_DIR" "$LOGS" "$STAMPS"
+# resolve_recipe: 16.2.0 is the in-repo series; 15.3.0 and 15.2.0 use the
+# pdaxrom 15.2.0 diffs.
+resolve_recipe() {
+	case "$GCC_VERSION" in
+		16.2.0)
+			GCC_SHA256=$GCC_SHA256_16_2_0
+			GCC_RECIPE=series
+			;;
+		15.3.0)
+			GCC_SHA256=$GCC_SHA256_15_3_0
+			GCC_RECIPE=pdaxrom
+			;;
+		15.2.0)
+			GCC_SHA256=$GCC_SHA256_15_2_0
+			GCC_RECIPE=pdaxrom
+			;;
+		*)
+			die "unsupported GCC version: ${GCC_VERSION} (known: 16.2.0, 15.3.0, 15.2.0)"
+			;;
+	esac
+	GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
+}
 
-for tool in curl tar patch make sha256sum; do
-	command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
-done
+prepare_work_dir() {
+	WORK_DIR=${WORK_DIR:-$(irix_default_work_dir "$REPO_ROOT" "$GCC_VERSION")}
+
+	if [ "$CLEAN" -eq 1 ]; then
+		rm -rf "$WORK_DIR"
+	fi
+
+	mkdir -p "$WORK_DIR"
+	WORK_DIR=$(cd "$WORK_DIR" && pwd)
+	PREFIX=${PREFIX:-${WORK_DIR}/prefix}
+	mkdir -p "$PREFIX"
+	PREFIX=$(cd "$PREFIX" && pwd)
+
+	if [ -n "$IRIX_SYSROOT" ]; then
+		[ -d "$IRIX_SYSROOT" ] || die "sysroot not found: $IRIX_SYSROOT"
+		IRIX_SYSROOT=$(cd "$IRIX_SYSROOT" && pwd)
+	fi
+	[ -n "$LANGUAGES" ] || {
+		if [ -n "$IRIX_SYSROOT" ]; then LANGUAGES=c,c++; else LANGUAGES=c; fi
+	}
+
+	DOWNLOADS=${WORK_DIR}/downloads
+	SRC_DIR=${WORK_DIR}/src
+	BUILD_DIR=${WORK_DIR}/build
+	LOGS=${WORK_DIR}/logs
+	STAMPS=${WORK_DIR}/stamps
+	mkdir -p "$DOWNLOADS" "$SRC_DIR" "$BUILD_DIR" "$LOGS" "$STAMPS"
+
+	for tool in curl tar patch make sha256sum; do
+		command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
+	done
+}
+
+# check_version_conflicts: an explicit work directory shared across releases
+# is refused by name, never silently reused, and a prefix holding another
+# release's compiler can never be reported as the requested one.
+check_version_conflicts() {
+	local conflicts default
+	conflicts=$(irix_gcc_version_conflicts "$WORK_DIR" "$GCC_VERSION")
+	if [ -n "$conflicts" ]; then
+		default=$(irix_default_work_dir "$REPO_ROOT" "$GCC_VERSION")
+		die "work dir ${WORK_DIR} holds artefacts from another GCC release:
+${conflicts}
+choose the version-separated default ${default} or pass --clean"
+	fi
+	local installed
+	if installed=$(irix_installed_gcc_version "$PREFIX" "$TARGET"); then
+		case "$installed" in
+			*"$GCC_VERSION"*) ;;
+			*)
+				die "installed compiler in ${PREFIX} reports '${installed}', not GCC ${GCC_VERSION}; remove it, choose a fresh --prefix or pass --clean"
+				;;
+		esac
+	fi
+}
 
 # fetch URL DEST SHA256: verified download, skipped when DEST already matches.
 fetch() {
@@ -236,72 +281,41 @@ extract() {
 	[ -d "${SRC_DIR}/${dir}" ] || die "tarball did not contain ${dir}"
 }
 
-# apply_patches SRCDIR PATCH...
-apply_patches() {
-	local dir=$1; shift
-	local marker_dir="${dir}/.irix-patched.d"
-	mkdir -p "$marker_dir"
-	local p name
-	for p in "$@"; do
-		name=$(basename "$p")
-		if [ -f "${marker_dir}/${name}" ]; then
-			echo "    already applied ${name}"
-			continue
-		fi
-		echo "    applying ${name}"
-		if patch -d "$dir" -p1 --batch --forward --silent < "$p"; then
-			touch "${marker_dir}/${name}"
-		elif patch -d "$dir" -p1 --batch -R --dry-run --silent < "$p"; then
-			echo "    already applied ${name}"
-			touch "${marker_dir}/${name}"
-		else
-			die "${name} did not apply cleanly"
-		fi
-	done
+# binutils_identity CONFIGURE-ARGS...: the full requested identity, including
+# the pinned patch checksums so it is knowable without a download.
+binutils_identity() {
+	printf 'component=binutils\n'
+	printf 'version=%s\n' "$BINUTILS_VERSION"
+	printf 'tarball_sha256=%s\n' "$BINUTILS_SHA256"
+	printf 'recipe=pdaxrom\n'
+	printf 'patches:\n'
+	irix_pinned_patch_identity "${BINUTILS_PATCHES[@]}"
+	printf 'configure:\n'
+	printf '%s\n' "$@"
 }
 
-# apply_series SRCDIR SERIES-FILE: apply the patches named by the manifest,
-# in order, via apply_patches.
-apply_series() {
-	local dir=$1 series=$2
-	local p list=()
-	while IFS= read -r p; do
-		case "$p" in
-			''|'#'*) continue ;;
-		esac
-		p="${series%/*}/${p}"
-		[ -f "$p" ] || die "series entry not found: ${p}"
-		list+=("$p")
-	done < "$series"
-	[ "${#list[@]}" -gt 0 ] || die "empty series: ${series}"
-	apply_patches "$dir" "${list[@]}"
-}
-
-# configure_and_make SRCDIR BUILDDIR LOG CONFIGURE-ARGS...
-#
-# Configures out of tree on first use, and reconfigures from scratch when the
-# arguments change, then makes and installs. Re-runs are cheap no-ops.
-configure_and_make() {
-	local src=$1 build=$2 log=$3
-	shift 3
-	local args=("$@")
-	local args_file="${build}/.irix-configure-args"
-	mkdir -p "$build"
-	if [ -f "${build}/config.status" ] &&
-		[ "$(cat "$args_file" 2>/dev/null || true)" != "${args[*]}" ]; then
-		note "configure options changed; rebuilding ${build##*/}"
-		rm -rf "$build"
-		mkdir -p "$build"
+# gcc_identity CONFIGURE-ARGS...: the full requested identity, including the
+# digest of every patch in apply order.
+gcc_identity() {
+	local patches list=()
+	printf 'component=gcc\n'
+	printf 'version=%s\n' "$GCC_VERSION"
+	printf 'tarball_sha256=%s\n' "$GCC_SHA256"
+	printf 'recipe=%s\n' "$GCC_RECIPE"
+	printf 'languages=%s\n' "$LANGUAGES"
+	printf 'sysroot=%s\n' "${IRIX_SYSROOT:-<none>}"
+	printf 'patches:\n'
+	if [ "$GCC_RECIPE" = series ]; then
+		patches=$(irix_series_patches "${GCC_SERIES_DIR}/series")
+		[ -n "$patches" ] || irix_die "empty series: ${GCC_SERIES_DIR}/series"
+		mapfile -t list <<<"$patches"
+		irix_patch_identity "${list[@]}"
+	else
+		irix_pinned_patch_identity "${GCC_15X_PATCHES[@]}"
+		irix_patch_identity "${LOCAL_GCC_PATCHES[@]}"
 	fi
-	(
-		cd "$build"
-		if [ ! -f config.status ]; then
-			"${src}/configure" "${args[@]}"
-			printf '%s\n' "${args[*]}" > "$args_file"
-		fi
-		make -j"$JOBS" all
-		make install
-	) 2>&1 | tee -a "$log"
+	printf 'configure:\n'
+	printf '%s\n' "$@"
 }
 
 # ---------------------------------------------------------------- binutils --
@@ -325,9 +339,11 @@ build_binutils() {
 		args+=("--with-sysroot=${IRIX_SYSROOT}")
 	fi
 
-	local stamp=${STAMPS}/binutils.installed
-	if [ -f "$stamp" ] && [ -x "${PREFIX}/bin/${TARGET}-as" ] &&
-		[ "$(cat "${stamp}.options" 2>/dev/null || true)" = "${args[*]}" ]; then
+	local identity stamp
+	identity=$(binutils_identity "${args[@]}")
+	stamp=${STAMPS}/binutils.installed
+	if irix_stamp_ok "$stamp" "$identity" \
+		"${PREFIX}/bin/${TARGET}-as" "${PREFIX}/bin/${TARGET}-ld"; then
 		note "binutils ${BINUTILS_VERSION} already installed"
 		return 0
 	fi
@@ -338,14 +354,14 @@ build_binutils() {
 	fetch_patches "${BINUTILS_PATCHES[@]}"
 	extract "${DOWNLOADS}/${BINUTILS_TARBALL}" "binutils-${BINUTILS_VERSION}"
 	local src="${SRC_DIR}/binutils-${BINUTILS_VERSION}"
-	apply_patches "$src" "${PATCH_FILES[@]}"
+	irix_apply_patches "$src" "${PATCH_FILES[@]}"
 
-	configure_and_make "$src" "${BUILD_DIR}/binutils" \
-		"${LOGS}/binutils.log" "${args[@]}"
+	irix_configure_and_make "$src" "${BUILD_DIR}/binutils" \
+		"${LOGS}/binutils.log" "$identity" "${args[@]}"
 
 	[ -x "${PREFIX}/bin/${TARGET}-as" ] || die "binutils install incomplete"
-	printf '%s\n' "${args[*]}" > "${stamp}.options"
-	touch "$stamp"
+	irix_write_stamp "$stamp" "$identity" \
+		"${PREFIX}/bin/${TARGET}-as" "${PREFIX}/bin/${TARGET}-ld"
 }
 
 # --------------------------------------------------------------------- gcc --
@@ -399,9 +415,10 @@ build_gcc() {
 		"${extra[@]}"
 	)
 
-	local stamp=${STAMPS}/gcc-${GCC_VERSION}.installed
-	if [ -f "$stamp" ] && [ -x "${PREFIX}/bin/${TARGET}-gcc" ] &&
-		[ "$(cat "${stamp}.options" 2>/dev/null || true)" = "${args[*]}" ]; then
+	local identity stamp
+	identity=$(gcc_identity "${args[@]}")
+	stamp=${STAMPS}/gcc-${GCC_VERSION}.installed
+	if irix_stamp_ok "$stamp" "$identity" "${PREFIX}/bin/${TARGET}-gcc"; then
 		note "GCC ${GCC_VERSION} already installed"
 		return 0
 	fi
@@ -412,40 +429,51 @@ build_gcc() {
 	extract "${DOWNLOADS}/${GCC_TARBALL}" "gcc-${GCC_VERSION}"
 	local src="${SRC_DIR}/gcc-${GCC_VERSION}"
 	if [ "$GCC_RECIPE" = series ]; then
-		apply_series "$src" "${GCC_SERIES_DIR}/series"
+		irix_apply_series "$src" "${GCC_SERIES_DIR}/series"
 	else
 		fetch_patches "${GCC_15X_PATCHES[@]}"
-		apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
+		irix_apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
 	fi
 
 	# The just-built binutils must win over any host as/ld.
 	export PATH="${PREFIX}/bin:${PATH}"
 
-	configure_and_make "$src" "${BUILD_DIR}/gcc" \
-		"${LOGS}/gcc.log" "${args[@]}"
+	irix_configure_and_make "$src" "${BUILD_DIR}/gcc" \
+		"${LOGS}/gcc.log" "$identity" "${args[@]}"
 
 	[ -x "${PREFIX}/bin/${TARGET}-gcc" ] || die "GCC install incomplete"
-	printf '%s\n' "${args[*]}" > "${stamp}.options"
-	touch "$stamp"
+	irix_write_stamp "$stamp" "$identity" "${PREFIX}/bin/${TARGET}-gcc"
 }
 
 # -------------------------------------------------------------------------- --
 
-note "IRIX 6.5 cross toolchain"
-echo "    target:   ${TARGET}"
-echo "    gcc:      ${GCC_VERSION} (${GCC_RECIPE} recipe)"
-echo "    work dir: ${WORK_DIR}"
-echo "    prefix:   ${PREFIX}"
-echo "    jobs:     ${JOBS}"
-echo "    sysroot:  ${IRIX_SYSROOT:-<none>}"
+main() {
+	parse_args "$@"
+	resolve_recipe
+	prepare_work_dir
+	check_version_conflicts
 
-build_binutils
-build_gcc
+	note "IRIX 6.5 cross toolchain"
+	echo "    target:   ${TARGET}"
+	echo "    gcc:      ${GCC_VERSION} (${GCC_RECIPE} recipe)"
+	echo "    work dir: ${WORK_DIR}"
+	echo "    prefix:   ${PREFIX}"
+	echo "    jobs:     ${JOBS}"
+	echo "    sysroot:  ${IRIX_SYSROOT:-<none>}"
 
-note "Verifying the toolchain"
-"${SCRIPT_DIR}/verify-toolchain.sh" --prefix "$PREFIX" \
-	--gcc-version "$GCC_VERSION"
+	build_binutils
+	build_gcc
 
-note "Done"
-echo "    prefix: ${PREFIX}"
-echo "    use:    ${PREFIX}/bin/${TARGET}-gcc -mabi=32|n32|64"
+	note "Verifying the toolchain"
+	"${SCRIPT_DIR}/verify-toolchain.sh" --prefix "$PREFIX" \
+		--gcc-version "$GCC_VERSION"
+
+	note "Done"
+	echo "    prefix: ${PREFIX}"
+	echo "    use:    ${PREFIX}/bin/${TARGET}-gcc -mabi=32|n32|64"
+}
+
+# Sourced by the identity tests; executed directly otherwise.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

@@ -62,6 +62,54 @@ nix and a fake rig-local Rust toolchain; nothing is fetched or compiled):
 python3 scripts/rig/test-build-iris.py
 ```
 
+## State markers and generations
+
+Provisioning and oracle phases record completion in `state/<name>.done`
+through `scripts/rig/rig-state.py`. A marker is not a timestamp: it is bound
+to a *generation* derived from the two things that define the guest under
+test.
+
+- The boot disk `$RIG_DISK`: its size, device, inode and a bounded (64 KiB)
+  digest of the volume header at the start of the image. The file timestamp is
+  deliberately excluded — the emulator writes inside the partitions during an
+  install, and that must not invalidate the install's own phase markers. A
+  replaced disk differs in inode and header digest; a removed disk is the
+  distinct `absent` identity.
+- The rig config `$RIG_CONFIG`: a digest of its bytes, so any edit invalidates
+  dependent markers.
+
+`marked NAME` is true only when the marker exists *and* its generation matches
+the current disk and config; `status NAME` prints `done ...`, `pending`,
+`stale generation (marker ..., disk/config ...)` or `legacy timestamp-only
+marker ...`. The shell helpers `rig_state` and `rig_state_marked` in `lib.sh`
+wrap the CLI; `install-driver.py`, `provision-guest.sh`, `oracle.sh` and
+`status.sh` all use them.
+
+The marker format is three lines:
+
+```
+generation: <sha256 hex>
+created: <local ISO timestamp>
+postcondition: <the claim the marker makes>
+```
+
+Writes are atomic (a same-directory temp file followed by `os.replace`), so a
+reader never sees a partial marker and a crash leaves the previous marker
+intact. `mark` is only called after the postcondition it names has been
+checked, and a phase with no marker is simply pending.
+
+Markers written before generation binding (a bare timestamp) and markers for a
+different disk or config do not certify anything: the phase re-runs.
+Replacing the boot disk or editing `iris.toml` therefore invalidates every
+dependent phase marker; `--fresh` remains the explicit way to drop all state
+and start over.
+
+The host-only marker tests run against temporary disk/config/state trees:
+
+```sh
+python3 scripts/rig/test-rig-state.py
+```
+
 ## Bring-up
 
 ```sh
@@ -76,8 +124,20 @@ which drops the state markers, NVRAM and disk image.
 
 The installer asks whether to load the maintenance or feature stream. The
 rebuild target is IRIX 6.5.7**m**, so the driver selects the maintenance
-stream; `logs/evidence.txt` records `versions eoe` naming 6.5.7m alongside
-`uname -a` and `hinv`.
+stream by parsing the menu's option number, and fails rather than defaulting
+if the menu offers no maintenance option. The verify phase refuses to declare
+the phase done unless `versions eoe` names 6.5.7m: `logs/evidence.txt` records
+that version proof alongside `uname -a` and `hinv`, only after the assertion.
+An interrupted verify resumes from a login prompt, a logged-in shell or the
+PROM.
+
+The install's `go` transcript is accumulated and classified as a whole:
+`ERROR:`/`Installations and removals failed` and unresolved conflicts take
+precedence over the success line, and the default allowlist of harmless
+messages is empty (an entry needs a cited transcript proving the exact line
+harmless). A required install disc that presents no distribution tree at all
+fails the phase; a miss on `/CDROM/dist` is tolerated only when
+`/CDROM/dist/unbundled` scanned.
 
 ## Day-to-day control
 

@@ -27,21 +27,21 @@ else
 	echo "emulator: stopped ($RIG_SOCKET)"
 fi
 
+# Markers are generation-bound (rig-state.py): "stale" means the disk or
+# config changed since the phase ran, so the phase no longer counts as done.
 for phase in phase-a label install verify; do
-	if [ -f "$RIG_STATE_DIR/$phase.done" ]; then
-		echo "phase $phase: done $(cat "$RIG_STATE_DIR/$phase.done")"
-	else
-		echo "phase $phase: pending"
-	fi
+	echo "phase $phase: $(rig_state status "$phase")"
 done
 
 while IFS=$'\t' read -r slug _ _; do
-	if [ -f "$RIG_STATE_DIR/oracle-$slug.done" ]; then
-		echo "oracle-$slug: done $(cat "$RIG_STATE_DIR/oracle-$slug.done")"
-	else
-		echo "oracle-$slug: pending"
-	fi
+	echo "oracle-$slug: $(rig_state status "oracle-$slug")"
 done < <(python3 "$RIG_REPO_ROOT/scripts/rig/oracle-driver.py" sets)
+
+if [ -L "$RIG_ORACLE_DIR/sysroot" ]; then
+	echo "sysroot: -> $(readlink "$RIG_ORACLE_DIR/sysroot")"
+elif [ -d "$RIG_ORACLE_DIR/sysroot" ]; then
+	echo "sysroot: legacy directory at $RIG_ORACLE_DIR/sysroot"
+fi
 
 if [ -d "$RIG_ORACLE_DIR" ]; then
 	echo "oracle: $RIG_ORACLE_DIR"

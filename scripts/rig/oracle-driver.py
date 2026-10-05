@@ -16,6 +16,9 @@ invocation; this driver only drives the interactive session:
   inst PRODUCTS  scan the mounted /CDROM/dist, keep everything, install the
                  named products, `go`, then quit through requickstart
   sets           print slug<TAB>media<TAB>products for oracle.sh (one per line)
+  check-products PRODUCTS
+                 read a `versions` listing on stdin and fail unless every
+                 requested product is named exactly
 
 `sets` is the single source of truth for what gets installed and in which
 order; the unit tests assert it covers headers, startfiles, libc/libm, the
@@ -27,6 +30,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -62,23 +66,27 @@ ORACLE_SETS = [
               "compiler_eoe compiler_eoe.sw64.lib compiler_eoe.sw64.unix"),
 ]
 
-SUCCESS = "Installations and removals were successful"
+SUCCESS = install_driver.SUCCESS
+
+# The one classifier now lives in install-driver.py, where it is shared by
+# both install paths: errors and conflicts take precedence over the success
+# line, and only explicitly justified harmless lines may be dropped.
+classify_go = install_driver.classify_install_transcript
 
 
-def classify_go(text: str) -> str | None:
-    """Classify the tail of an inst `go` transcript.
+def missing_products(products: str, output: str) -> list[str]:
+    """The requested products that a `versions` listing does not name.
 
-    Matches the exact strings inst 3.8 emits on the install media: success,
-    an unresolved conflict (defensive — `keep *` plus rulesoverride should
-    prevent it) or an INSTALL/exitop error.
+    Matching is token-exact, so requesting `compiler_eoe` is not satisfied by
+    the output naming only `compiler_eoe.sw64.lib`: the requested product
+    itself must be installed before the set's marker may be written.
     """
-    if SUCCESS in text:
-        return "success"
-    if "Resolve conflicts by typing" in text or "Conflicts must be resolved" in text:
-        return "conflict"
-    if "ERROR:" in text or "Installations and removals failed" in text:
-        return "error"
-    return None
+    missing = []
+    for product in products.split():
+        pattern = rf"(?<![\w.]){re.escape(product)}(?![\w.])"
+        if not re.search(pattern, output):
+            missing.append(product)
+    return missing
 
 
 def ensure_shell(rig: Rig, ic: str) -> None:
@@ -129,15 +137,21 @@ def run_inst(rig: Rig, products: str) -> None:
 
     print("  go")
     rig.send("go")
+    # The whole run is classified once, from a transcript that is never
+    # discarded, so an error can neither be cleared by a later prompt nor be
+    # hidden by the success line.
+    transcript: list[str] = []
     outcome = None
     deadline = time.monotonic() + 4 * 3600.0
     while outcome is None:
-        outcome = classify_go(rig.buf)
+        rig.pump()
+        if rig.buf:
+            transcript.append(rig.buf)
+        outcome = classify_go("".join(transcript))
         if outcome is None:
             if time.monotonic() >= deadline:
                 tail, rig.buf = rig.buf[-3000:], ""
                 raise RigError(f"inst `go` did not finish; last output:\n{tail}")
-            rig.pump()
             time.sleep(0.5)
     if outcome == "conflict":
         tail, rig.buf = rig.buf[-3000:], ""
@@ -151,12 +165,36 @@ def run_inst(rig: Rig, products: str) -> None:
     rig.expect_re(r"(?m)^IRIS \d+# $", 3600)
 
 
+def product_check(products: str) -> int:
+    """Check a `versions` output on stdin names every requested product.
+
+    Split out from the console driver so oracle.sh can verify a set before it
+    writes the set's marker, and so the check is host-testable.
+    """
+    output = sys.stdin.read()
+    missing = missing_products(products, output)
+    if missing:
+        print(
+            "oracle: versions does not name the installed products: "
+            + " ".join(missing),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("action", choices=["ensure-shell", "inst", "sets"])
-    parser.add_argument("products", nargs="?", help="for `inst`: the products to install")
+    parser.add_argument(
+        "action", choices=["ensure-shell", "inst", "sets", "check-products"]
+    )
+    parser.add_argument(
+        "products",
+        nargs="?",
+        help="for `inst`: the products to install; for `check-products`: the products to require",
+    )
     parser.add_argument("--socket", default=os.environ.get("IRIS_SOCKET"))
     parser.add_argument("--log", default=os.environ.get("RIG_DRIVER_LOG"))
     parser.add_argument("--ic", default=os.environ.get("RIG_IRIS_CI"))
@@ -167,6 +205,11 @@ def main() -> int:
         for slug, media, products in ORACLE_SETS:
             print(f"{slug}\t{media}\t{products}")
         return 0
+
+    if args.action == "check-products":
+        if not args.products:
+            parser.error("check-products needs the products to require")
+        return product_check(args.products)
 
     if not args.socket:
         parser.error("--socket or $IRIS_SOCKET is required (the rig's socket, never /tmp/iris.sock)")

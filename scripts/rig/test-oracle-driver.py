@@ -8,9 +8,12 @@ sysroot manifest's coverage of headers, startfiles and libc/libm per ABI.
 """
 
 import importlib.util
+import io
 import os
 import subprocess
+import sys
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -43,7 +46,7 @@ exitop('...'): ERROR: cannot create /usr/lib/thing
 
 
 class ClassifyGo(unittest.TestCase):
-    def test_success_wins_over_earlier_error_lookalike(self):
+    def test_success_tail_is_success(self):
         self.assertEqual(drv.classify_go(SUCCESS_TAIL), "success")
 
     def test_unresolved_conflict(self):
@@ -57,6 +60,56 @@ class ClassifyGo(unittest.TestCase):
 
     def test_quiet_transcript_is_unclassified(self):
         self.assertIsNone(drv.classify_go("Installing/removing files .. 47%"))
+
+    def test_an_earlier_error_beats_a_later_success_line(self):
+        self.assertEqual(drv.classify_go(ERROR_TAIL + SUCCESS_TAIL), "error")
+
+    def test_an_earlier_conflict_beats_a_later_success_line(self):
+        self.assertEqual(drv.classify_go(CONFLICT_TAIL + SUCCESS_TAIL), "conflict")
+
+    def test_the_shared_classifier_is_used(self):
+        self.assertIs(
+            drv.classify_go, install_driver.classify_install_transcript
+        )
+
+
+class ProductVerification(unittest.TestCase):
+    VERSIONS = """
+compiler_dev   7.3
+c_dev          7.3
+c_fe           7.3
+irix_dev       6.5.7m
+dev            6.5.7m
+"""
+
+    def test_no_missing_products_when_all_are_named(self):
+        self.assertEqual(
+            drv.missing_products("compiler_dev c_dev c_fe", self.VERSIONS), []
+        )
+
+    def test_missing_product_is_reported(self):
+        self.assertEqual(
+            drv.missing_products("compiler_dev compiler_eoe", self.VERSIONS),
+            ["compiler_eoe"],
+        )
+
+    def test_a_child_product_does_not_satisfy_the_parent(self):
+        self.assertEqual(
+            drv.missing_products("compiler_eoe", "compiler_eoe.sw64.lib 7.4\n"),
+            ["compiler_eoe"],
+        )
+
+    def test_partial_token_does_not_satisfy(self):
+        self.assertEqual(drv.missing_products("c_dev", "xc_dev 7.3\n"), ["c_dev"])
+
+    def test_product_check_accepts_and_rejects_on_stdin(self):
+        with mock.patch.object(sys, "stdin", io.StringIO(self.VERSIONS)):
+            self.assertEqual(drv.product_check("c_dev c_fe"), 0)
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(self.VERSIONS)), \
+             redirect_stderr(stderr):
+            self.assertEqual(drv.product_check("c_dev compiler_eoe"), 1)
+        self.assertIn("compiler_eoe", stderr.getvalue())
 
 
 class OracleSets(unittest.TestCase):

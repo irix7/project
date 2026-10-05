@@ -21,6 +21,7 @@ post-mortem can see exactly which prompt it was looking at.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -28,9 +29,26 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 POLL_SECS = 0.5
 DEFAULT_TIMEOUT = 120.0
+
+
+def _load_rig_state():
+    """Load the shared generation-bound marker module (rig-state.py).
+
+    The dashed filename cannot be imported by name, so it is loaded from its
+    path, like oracle-driver does with this file.
+    """
+    path = Path(__file__).with_name("rig-state.py")
+    spec = importlib.util.spec_from_file_location("rig_state", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+rig_state = _load_rig_state()
 
 SYSTEM_PARTITION = "scsi(0)disk(1)rdisk(0)partition(8)"
 OSLOAD_PARTITION = "scsi(0)disk(1)rdisk(0)partition(0)"
@@ -79,6 +97,117 @@ def disc_matches(requested: str, mounted: str) -> bool:
 
 class RigError(Exception):
     pass
+
+
+SUCCESS = "Installations and removals were successful"
+ERROR_MARKERS = ("ERROR:", "Installations and removals failed")
+CONFLICT_MARKERS = ("Conflicts must be resolved", "Resolve conflicts by typing")
+
+# Lines that may match an error marker yet are known harmless. Deliberately
+# empty: the audit's stored transcript paired an incompatible-subsystems error
+# with "install: ok", and that error's harmlessness was never established, so
+# a mixed transcript must fail. An entry here needs a cited transcript and a
+# test proving the exact line is harmless; blanket suppression is forbidden.
+HARMLESS_LINES: tuple[str, ...] = ()
+
+# The maintenance stream is the rebuild target (6.5.7m); a "versions eoe"
+# output that does not name it cannot certify the guest.
+RELEASE_TARGET = "6.5.7m"
+
+
+def _without_harmless(text: str, harmless: tuple[str, ...] = HARMLESS_LINES) -> str:
+    if not harmless:
+        return text
+    return "\n".join(
+        line for line in text.splitlines() if not any(ok in line for ok in harmless)
+    )
+
+
+def classify_install_transcript(
+    text: str, harmless: tuple[str, ...] = HARMLESS_LINES
+) -> str | None:
+    """Classify a whole inst transcript: error, conflict, success or None.
+
+    Errors and conflicts take precedence over the success line: a run that
+    printed both is not a success, which is precisely the mixed transcript the
+    audit found certifying a bad install. Only lines explicitly allowlisted as
+    harmless are dropped before the markers are looked for.
+    """
+    cleaned = _without_harmless(text, harmless)
+    if any(marker in cleaned for marker in ERROR_MARKERS):
+        return "error"
+    if any(marker in cleaned for marker in CONFLICT_MARKERS):
+        return "conflict"
+    if SUCCESS in cleaned:
+        return "success"
+    return None
+
+
+def has_failure(text: str, harmless: tuple[str, ...] = HARMLESS_LINES) -> bool:
+    """True when the text carries an error or conflict marker."""
+    outcome = classify_install_transcript(text, harmless)
+    return outcome in ("error", "conflict")
+
+
+def maintenance_stream_verified(versions_output: str) -> bool:
+    """True when `versions eoe | cat` names the 6.5.7m maintenance stream."""
+    return (
+        re.search(rf"(?<![0-9A-Za-z.]){re.escape(RELEASE_TARGET)}(?![0-9A-Za-z])", versions_output)
+        is not None
+    )
+
+
+def stream_choice_number(menu_text: str) -> str | None:
+    """The option number whose menu line names the maintenance stream.
+
+    inst numbers the stream menu; the option is parsed from the text rather
+    than assumed, so a renumbered or reordered menu cannot silently select the
+    feature stream. None means the maintenance stream is not on the menu.
+    """
+    for line in menu_text.splitlines():
+        if "maintenance stream" in line.lower():
+            match = re.match(r"\s*([0-9]+)\s*[.)]", line)
+            if match:
+                return match.group(1)
+    return None
+
+
+def is_stream_menu(menu_text: str) -> bool:
+    """True when the choice text is inst's stream menu (not a generic prompt)."""
+    return "stream" in menu_text.lower()
+
+
+class StreamSelection:
+    """Answer inst's maintenance/feature stream menu, verifying the outcome.
+
+    The menu is answered by parsing the maintenance option's number; a menu
+    that mentions streams but offers no maintenance option is an error, and a
+    choice that is re-offered without the scan making progress fails after a
+    bounded number of consecutive attempts instead of looping. `progress`
+    resets the counter, because each disc in the changer legitimately offers
+    its own menu. No other prompt is answered blindly here.
+    """
+
+    def __init__(self, max_consecutive: int = 3):
+        self.max_consecutive = max_consecutive
+        self.attempts = 0
+        self.selected = False
+
+    def answer(self, menu_text: str) -> str:
+        number = stream_choice_number(menu_text)
+        if number is None:
+            raise RigError(
+                "inst offered a stream menu with no maintenance stream option"
+            )
+        self.attempts += 1
+        if self.attempts > self.max_consecutive:
+            raise RigError("inst rejected the maintenance stream choice repeatedly")
+        self.selected = True
+        return number
+
+    def progress(self) -> None:
+        """A completed scan; the next menu is a fresh selection."""
+        self.attempts = 0
 
 
 class Rig:
@@ -169,17 +298,34 @@ class Rig:
     def send(self, text: str, cr: bool = True) -> None:
         self.rpc("serial-send", data=text + ("\r" if cr else ""))
 
-    def expect(self, patterns, timeout: float = DEFAULT_TIMEOUT):
+    def expect(self, patterns, timeout: float = DEFAULT_TIMEOUT, earliest: bool = False):
+        """Consume the first matching pattern; with `earliest`, the one that
+        appears first in the buffer rather than the first in `patterns`.
+
+        Prompt detectors list patterns most-specific first, but a stale prompt
+        earlier in the buffer (a login line followed by a shell prompt after a
+        retry) must win over a later-but-earlier-listed one. `earliest` gives
+        that position-based choice where a state machine depends on it.
+        """
         if isinstance(patterns, str):
             patterns = [patterns]
         deadline = time.monotonic() + timeout
         while True:
+            idx = -1
+            match = None
             for pattern in patterns:
-                idx = self.buf.find(pattern)
-                if idx >= 0:
-                    end = idx + len(pattern)
-                    matched, self.buf = self.buf[:end], self.buf[end:]
-                    return matched, pattern
+                found = self.buf.find(pattern)
+                if found < 0:
+                    continue
+                if not earliest:
+                    idx, match = found, pattern
+                    break
+                if match is None or found < idx:
+                    idx, match = found, pattern
+            if match is not None:
+                end = idx + len(match)
+                matched, self.buf = self.buf[:end], self.buf[end:]
+                return matched, match
             if time.monotonic() >= deadline:
                 tail = self.buf[-3000:]
                 self.buf = ""
@@ -210,16 +356,6 @@ class Rig:
     def send_expect(self, text: str, patterns, timeout: float = DEFAULT_TIMEOUT, cr: bool = True):
         self.send(text, cr=cr)
         return self.expect(patterns, timeout)
-
-
-def mark(state_dir: str, name: str) -> None:
-    os.makedirs(state_dir, exist_ok=True)
-    with open(os.path.join(state_dir, f"{name}.done"), "w") as f:
-        f.write(time.strftime("%Y-%m-%dT%H:%M:%S\n"))
-
-
-def marked(state_dir: str, name: str) -> bool:
-    return os.path.exists(os.path.join(state_dir, f"{name}.done"))
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +400,11 @@ def phase_a(rig: Rig, state_dir: str) -> None:
 
     rig.rpc("rtc-save")
     print("  nvram persisted")
-    mark(state_dir, "phase-a")
+    rig_state.mark(
+        state_dir,
+        "phase-a",
+        "NVRAM persisted SystemPartition, OSLoadPartition and console=d",
+    )
 
 
 def label(rig: Rig, state_dir: str) -> None:
@@ -304,7 +444,11 @@ def label(rig: Rig, state_dir: str) -> None:
         rig.send(cmd)
         rig.expect_re(pattern, 300)
 
-    mark(state_dir, "label")
+    rig_state.mark(
+        state_dir,
+        "label",
+        "fx.ARCS labelled and synced the boot disk's volume header",
+    )
 
 
 def to_inst_prompt(rig: Rig, timeout: float = 1200.0) -> None:
@@ -350,13 +494,40 @@ def to_inst_prompt(rig: Rig, timeout: float = 1200.0) -> None:
         time.sleep(POLL_SECS)
 
 
-def scan_path(rig: Rig, path: str, timeout: float = 1800.0) -> bool:
+# Every install disc must offer at least one distribution tree. /CDROM/dist is
+# the modern layout; the overlay discs historically carry /CDROM/dist/unbundled
+# instead, so it is accepted as the alternative rather than as a second miss.
+REQUIRED_DISC_PATHS: tuple[str, ...] = ("/CDROM/dist",)
+ALTERNATE_DISC_PATHS: tuple[str, ...] = ("/CDROM/dist/unbundled",)
+
+
+def disc_scan_error(disc: str, results: list[tuple[str, bool]]) -> str | None:
+    """The failure reason when a disc scanned no distribution tree at all.
+
+    A miss on /CDROM/dist is tolerated only when the alternate path scanned,
+    so a required disc that presents nothing fails the phase instead of being
+    printed "not present" and skipped.
+    """
+    if any(ok for _, ok in results):
+        return None
+    tried = ", ".join(path for path, _ in results)
+    return f"{disc}: no installable distribution found (tried {tried})"
+
+
+def scan_path(
+    rig: Rig,
+    selection: StreamSelection,
+    path: str,
+    timeout: float = 1800.0,
+) -> bool:
     """Point inst's `from` loop at one distribution path; True if it scanned.
 
     A scan can raise the maintenance/feature stream choice part-way through
-    (after the README scrolls), so the maintenance stream (6.5.7m, the rebuild
-    target) is selected there; a switch-distributions confirmation before any
-    selections is safe to confirm. An absent path is a miss, not an error.
+    (after the README scrolls); the maintenance stream (6.5.7m, the rebuild
+    target) is selected from that menu by parsing its option number, and a
+    stream menu without a maintenance option is an error. A
+    switch-distributions confirmation before any selections is safe to
+    confirm. An absent path is a miss, not an error.
     """
     rig.clear()
     rig.send(path)
@@ -381,13 +552,19 @@ def scan_path(rig: Rig, path: str, timeout: float = 1800.0) -> bool:
             m, response = min(candidates, key=lambda c: c[0].start())
             context, rig.buf = rig.buf[:m.end()], rig.buf[m.end():]
             if response is None:
+                selection.progress()
                 return True
             if response == "ERR":
                 return False
             if response == "y":
                 rig.send("y")
+            elif is_stream_menu(context):
+                number = selection.answer(context)
+                print(f"  selecting maintenance stream ({number})")
+                rig.send(number)
             else:
-                rig.send("1" if "maintenance stream" in context else "")
+                # Not the stream menu: answer the prompt's default, as before.
+                rig.send("")
             continue
         if time.monotonic() >= deadline:
             tail = rig.buf[-3000:]
@@ -397,22 +574,26 @@ def scan_path(rig: Rig, path: str, timeout: float = 1800.0) -> bool:
         time.sleep(POLL_SECS)
 
 
-def from_prompt(rig: Rig) -> None:
+def from_prompt(rig: Rig, selection: StreamSelection) -> None:
     """Advance inst's `from` command to its path prompt.
 
     `from` offers the maintenance/feature stream choice before it asks for a
     distribution path. The rebuild target is IRIX 6.5.7m, the maintenance
-    stream, so pick option 1 when that menu is on screen; any other numbered
-    prompt gets its default. The prompt is matched on its literal text so the
-    word "stream" inside the explanatory prose cannot fire early.
+    stream, so its parsed option number is selected; a stream menu without a
+    maintenance option fails rather than defaulting. Any other numbered prompt
+    gets its default. The prompt is matched on its literal text so the word
+    "stream" inside the explanatory prose cannot fire early.
     """
     while True:
-        out, pattern = rig.expect(["Install software from:", "Please enter a choice"], 300)
+        out, pattern = rig.expect(
+            ["Install software from:", "Please enter a choice"], 300, earliest=True
+        )
         if pattern == "Install software from:":
             return
-        if "maintenance stream" in out:
-            print("  selecting maintenance stream")
-            rig.send("1")
+        if is_stream_menu(out):
+            number = selection.answer(out)
+            print(f"  selecting maintenance stream ({number})")
+            rig.send(number)
         else:
             print("  accepting default choice")
             rig.send("")
@@ -422,49 +603,74 @@ def load_distributions(rig: Rig, disc_names: list[str]) -> None:
     """Scan every install disc through inst's `from` loop.
 
     The changer is cycled with `cdrom-eject` (disc 0 is already mounted when
-    the loop starts). Foundation discs put their products in /CDROM/dist; the
-    overlay discs historically also carry an unbundled tree, so both paths are
-    offered for every disc and a missing one is skipped.
+    the loop starts). Every disc must present at least one distribution tree:
+    /CDROM/dist, or the overlays' historical /CDROM/dist/unbundled. A disc
+    that presents neither raises rather than being skipped.
     """
+    selection = StreamSelection()
     rig.send("from")
-    from_prompt(rig)
+    from_prompt(rig, selection)
 
     for index, name in enumerate(disc_names):
         if index > 0:
             disc = rig.rpc("cdrom-eject", id=4)
             print(f"  cdrom-eject 4 -> {disc}")
-        for path in ("/CDROM/dist", "/CDROM/dist/unbundled"):
-            ok = scan_path(rig, path)
+        results: list[tuple[str, bool]] = []
+        for path in (*REQUIRED_DISC_PATHS, *ALTERNATE_DISC_PATHS):
+            ok = scan_path(rig, selection, path)
+            results.append((path, ok))
             print(f"  {name}: {path} {'scanned' if ok else 'not present'}")
+        error = disc_scan_error(name, results)
+        if error:
+            raise RigError(error)
 
     rig.send("done")
     rig.expect(["Inst>"], 60)
 
 
-def drive_install(rig: Rig, timeout: float = 4 * 3600.0) -> None:
-    """Run `go` to completion, answering CD-swap prompts by cycling the changer.
+def answer_cd_request(rig: Rig, requested: str) -> None:
+    """Cycle the changer until the disc inst asked for is mounted.
 
     inst asks for each disc by name (`Please insert the "X" CD.`). The SCSI
-    changer on ID 4 is cycled until the mounted image's filename contains the
-    requested name, then Enter lets the install resume.
+    changer on ID 4 is cycled until the mounted image's filename matches the
+    request; a changer that never produces the disc fails loudly instead of
+    sending Enter into a prompt that can only fail.
     """
-    requested: str | None = None
+    for _ in range(7):
+        data = rig.rpc("cdrom-eject", id=4)
+        print(f"    mounted {data.get('new_disc', data)}")
+        if disc_matches(requested, str(data.get("new_disc", ""))):
+            return
+    raise RigError(f"changer never mounted the requested CD: {requested!r}")
+
+
+def drive_install(rig: Rig, timeout: float = 4 * 3600.0) -> str:
+    """Run `go` to completion, answering CD-swap prompts by cycling the changer.
+
+    The transcript is accumulated separately from the prompt buffer, because
+    CD-swap handling consumes the buffer and a success line must never hide an
+    earlier error. Classification happens once, over the whole run, with
+    errors and conflicts taking precedence over success; the transcript is
+    returned so callers can keep it as evidence.
+    """
+    transcript: list[str] = []
     deadline = time.monotonic() + timeout
     while True:
         if time.monotonic() >= deadline:
             raise RigError("install did not finish within the time budget")
         rig.pump()
+        if rig.buf:
+            transcript.append(rig.buf)
+
+        if SUCCESS in rig.buf or has_failure(rig.buf):
+            break
 
         m = re.search(r'[Ii]nsert the ["\']([^"\']+)["\'] CD', rig.buf)
         if m:
             requested = m.group(1)
             rig.buf = ""
             print(f"  inst asks for CD: {requested}")
-            for _ in range(7):
-                data = rig.rpc("cdrom-eject", id=4)
-                print(f"    mounted {data.get('new_disc', data)}")
-                if disc_matches(requested, str(data.get("new_disc", ""))):
-                    break
+            answer_cd_request(rig, requested)
             rig.send("")
             continue
 
@@ -474,18 +680,33 @@ def drive_install(rig: Rig, timeout: float = 4 * 3600.0) -> None:
             rig.send("")
             continue
 
-        if "Installations and removals were successful" in rig.buf:
-            print("  Installations and removals were successful.")
-            return
-
-        if "Conflicts must be resolved" in rig.buf:
-            raise RigError("inst reported unresolved conflicts (rulesoverride should prevent this)")
-
-        if "ERROR:" in rig.buf:
-            tail = rig.buf[-2000:]
-            raise RigError(f"inst reported an error:\n{tail}")
-
         time.sleep(POLL_SECS)
+
+    text = "".join(transcript)
+    outcome = classify_install_transcript(text)
+    if outcome == "error":
+        raise RigError(f"inst reported an error in the go transcript:\n{text[-2000:]}")
+    if outcome == "conflict":
+        raise RigError(
+            "inst reported unresolved conflicts (rulesoverride should prevent this):\n"
+            f"{text[-2000:]}"
+        )
+    if outcome != "success":
+        raise RigError(f"inst `go` ended without the success line:\n{text[-2000:]}")
+    print("  Installations and removals were successful.")
+    return text
+
+
+def quit_and_restart(rig: Rig, timeout: float = 3600.0) -> None:
+    """Quit inst and answer its restart prompt.
+
+    The restart prompt must actually arrive: a timeout raises from expect_re,
+    the install phase is marked failed, and the marker is never written. The
+    caller only marks after this returns.
+    """
+    rig.send("quit")
+    rig.expect_re(r"(?i)restart", timeout)
+    rig.send("y")
 
 
 def install(rig: Rig, media_names: list[str], state_dir: str) -> None:
@@ -516,52 +737,107 @@ def install(rig: Rig, media_names: list[str], state_dir: str) -> None:
     drive_install(rig)
 
     # Post-install: requickstart walks the whole tree, then autoconfig runs,
-    # then inst finally offers the restart.
-    rig.send("quit")
-    rig.expect(["Restart"], 3600)
-    rig.send("y")
-    mark(state_dir, "install")
+    # then inst finally offers the restart. `quit` must reach that prompt; a
+    # timeout here is a failed handshake, not a success, and is never marked.
+    quit_and_restart(rig)
+    rig_state.mark(
+        state_dir,
+        "install",
+        "inst go reported success and the quit/restart handshake was answered",
+    )
+
+
+def resume_to_login(rig: Rig, ic: str, timeout: float = 1800.0) -> None:
+    """Get from login, a logged-in shell or the PROM to a logged-in shell.
+
+    An interrupted verify resumes from any of those console states rather than
+    needing its marker dropped by hand. The earliest-position match keeps a
+    stale login line from winning over the shell prompt that followed it. The
+    `Enter 'c' to continue` sash repair prompt (the installed volume header
+    still carries the miniroot `ide` blob) is answered and the wait continues.
+    """
+    while True:
+        out, pattern = rig.expect(
+            [
+                "console login:",
+                "login:",
+                "# ",
+                "Option?",
+                ">> ",
+                "Enter 'c' to continue",
+            ],
+            timeout,
+            earliest=True,
+        )
+        if pattern == "Enter 'c' to continue":
+            rig.send("c")
+            continue
+        if pattern == "# ":
+            return
+        if pattern in ("console login:", "login:"):
+            # iris-ci's login waits server-side until the shell answers, the
+            # same contract ensure_shell relies on; no extra prompt read here.
+            rig.run_ic(ic, "login")
+        else:
+            # PROM: let iris-ci boot through to the login prompt, then log in.
+            rig.run_ic(ic, "boot")
+            rig.run_ic(ic, "login")
+        return
 
 
 def verify(rig: Rig, state_dir: str, ic: str, evidence: str) -> None:
     """Log in on the console and record the acceptance evidence.
 
-    The installed volume header still has the miniroot `ide` blob, so sash can
-    stop on its "miniroot install failed" repair prompt before init; answer
-    `c` (continue without state fixup) and remove the blob once logged in.
+    Resumes from login, shell or PROM (`resume_to_login`), removes the stale
+    miniroot `ide` blob, and only records the evidence after `versions eoe`
+    has been checked to name the 6.5.7m maintenance stream. A wrong or
+    unrecognised release raises: the marker must certify the target release,
+    not merely a successful login.
     """
     rig.rpc("start")
-    while True:
-        out, pattern = rig.expect(
-            ["console login:", "login:", "Enter 'c' to continue"], 1800
-        )
-        if pattern == "Enter 'c' to continue":
-            rig.send("c")
-            continue
-        break
+    resume_to_login(rig, ic)
 
-    rig.run_ic(ic, "login")
+    # Removing the stale file is cleanup, not a postcondition: a resumed
+    # verify whose first attempt already deleted the blob would otherwise die
+    # here. The blob's only effect is the sash repair prompt, which
+    # resume_to_login answers, so a tolerated failure is safe.
     rig.run_ic(
         ic,
         "run",
         "--timeout",
         "120",
-        "dvhtool -v delete ide /dev/rdsk/dks0d1vh",
+        "dvhtool -v delete ide /dev/rdsk/dks0d1vh >/dev/null 2>&1 || true",
         capture_output=True,
         text=True,
     )
 
-    lines = ["# Rig verification " + time.strftime("%Y-%m-%dT%H:%M:%S") + "\n"]
     # `versions eoe` is the version proof: it names the release as 6.5.7m,
     # the maintenance-stream target, which uname alone does not. Pipe it
     # through cat so IRIX does not page the output on the console.
+    outputs: dict[str, str] = {}
     for cmd in ("uname -a", "hinv", "versions eoe | cat"):
-        proc = rig.run_ic(ic, "run", "--timeout", "120", cmd, capture_output=True, text=True)
+        proc = rig.run_ic(
+            ic, "run", "--timeout", "120", cmd, capture_output=True, text=True
+        )
         print(proc.stdout)
-        lines.append(f"$ {cmd}\n{proc.stdout}\n")
+        outputs[cmd] = proc.stdout
+
+    if not maintenance_stream_verified(outputs["versions eoe | cat"]):
+        raise RigError(
+            "versions eoe did not name 6.5.7m (maintenance stream); "
+            "refusing to record verification"
+        )
+
+    lines = ["# Rig verification " + time.strftime("%Y-%m-%dT%H:%M:%S") + "\n"]
+    for cmd in ("uname -a", "hinv", "versions eoe | cat"):
+        lines.append(f"$ {cmd}\n{outputs[cmd]}\n")
     with open(evidence, "w") as f:
         f.writelines(lines)
-    mark(state_dir, "verify")
+    rig_state.mark(
+        state_dir,
+        "verify",
+        "logged in; versions eoe named 6.5.7m; evidence recorded",
+    )
 
 
 def main() -> int:
@@ -597,7 +873,7 @@ def main() -> int:
 
     rig = Rig(args.socket, args.log, echo=not args.quiet)
     try:
-        if marked(args.state_dir, args.phase):
+        if rig_state.marked(args.state_dir, args.phase):
             print(f"{args.phase}: already done ({args.state_dir})")
             return 0
         if args.phase == "phase-a":

@@ -77,6 +77,20 @@ rig_die() {
 	exit 1
 }
 
+# Generation-bound state markers (rig-state.py, issue #25). Every marker is
+# bound to the boot disk's volume header and the rig config digest, so a
+# replaced disk or an edited iris.toml invalidates it; writes are atomic.
+# RIG_STATE_DIR, RIG_DISK and RIG_CONFIG are exported above, so the CLI sees
+# the same identity the shell does.
+rig_state() {
+	python3 "$RIG_REPO_ROOT/scripts/rig/rig-state.py" "$@"
+}
+
+# True only when NAME's marker exists and certifies the current generation.
+rig_state_marked() {
+	rig_state marked "$1"
+}
+
 # A compiled iris is the precondition of everything else.
 rig_require_iris() {
 	[ -x "$RIG_IRIS" ] || rig_die "no iris binary at $RIG_IRIS (run scripts/rig/build-iris.sh)"

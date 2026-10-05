@@ -26,6 +26,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 ORACLE_FILES="$RIG_REPO_ROOT/scripts/rig/sysroot.files"
 ORACLE_DRIVER="$RIG_REPO_ROOT/scripts/rig/oracle-driver.py"
+ORACLE_CAPTURE="$RIG_REPO_ROOT/scripts/rig/oracle-capture.py"
 
 usage() {
 	cat <<'EOF'
@@ -48,10 +49,6 @@ patched 7.3 driver (default $RIG_ORACLE_DIR/mipspro-7.3-n32-driver) or
 IRIX_MIPSPRO_LICENSE to a valid /var/flexlm/license.dat. Neither is
 shipped with this repo.
 EOF
-}
-
-oracle_marker() {
-	printf '%s/oracle-%s.done\n' "$RIG_STATE_DIR" "$1"
 }
 
 # The media and products are spelled once, in oracle-driver.py's ORACLE_SETS;
@@ -116,9 +113,9 @@ cmd_install() {
 	fi
 	mkdir -p "$RIG_STATE_DIR"
 
-	local slug disc products
+	local slug disc products out
 	while IFS=$'\t' read -r slug disc products; do
-		if [ -f "$(oracle_marker "$slug")" ]; then
+		if rig_state_marked "oracle-$slug"; then
 			rig_log "install $slug: already done"
 			continue
 		fi
@@ -127,7 +124,17 @@ cmd_install() {
 		python3 "$ORACLE_DRIVER" \
 			--socket "$RIG_SOCKET" --log "$RIG_DRIVER_LOG" \
 			inst "$products"
-		printf '%s\n' "$(date -Iseconds)" >"$(oracle_marker "$slug")"
+
+		# A set is marked only after the guest's own versions listing names
+		# every product that was requested, not merely after inst returned 0.
+		if ! out=$(ic run "versions $products | cat" --timeout 300); then
+			rig_die "install $slug: versions $products could not be read"
+		fi
+		if ! printf '%s\n' "$out" | python3 "$ORACLE_DRIVER" check-products "$products"; then
+			rig_die "install $slug: the guest does not name the requested products"
+		fi
+		rig_state mark "oracle-$slug" \
+			--postcondition "inst installed and versions named: $products"
 	done < <(oracle_sets)
 
 	ic run "umount /CDROM" --timeout 120 >/dev/null 2>&1 || true
@@ -160,17 +167,31 @@ cmd_patch() {
 	rig_log "cc runs; oracle is licensed or locally patched"
 }
 
+# A retrieval that produced no file is a failed transfer, never an empty
+# capture member: validate it at the boundary, then again before publication.
+oracle_get() {
+	local src=$1 dest=$2
+	ic get "$src" --to "$dest" --timeout 900
+	[ -s "$dest" ] || rig_die "retrieval produced no file: $dest"
+}
+
 cmd_capture() {
 	rig_ensure_running
 	rig_ensure_shell
-	mkdir -p "$RIG_ORACLE_DIR"
+	mkdir -p "$RIG_ORACLE_DIR/generations"
 
-	# Drop the previous capture's artefacts so a stale file can never be
-	# confused with this run's output. The local driver is not matched.
-	rm -f "$RIG_ORACLE_DIR"/hello* "$RIG_ORACLE_DIR"/environment.txt \
-		"$RIG_ORACLE_DIR"/sysroot.tar.gz "$RIG_ORACLE_DIR"/sysroot.manifest \
-		"$RIG_ORACLE_DIR"/sysroot.sha256 "$RIG_ORACLE_DIR"/manifest.sha256
-	rm -rf "$RIG_ORACLE_DIR/sysroot"
+	# A capture is a generation: bound to the guest's disk/config generation
+	# and a UTC stamp, and built under a hidden directory. Nothing a host
+	# build reads is touched until the whole generation has been validated
+	# and published by a symlink swap.
+	local gen stamp name cap_dir
+	gen=$(rig_state generation)
+	stamp=$(date -u +%Y%m%dT%H%M%SZ)
+	name=$(python3 "$ORACLE_CAPTURE" capture-name --generation "$gen" --stamp "$stamp")
+	cap_dir="$RIG_ORACLE_DIR/generations/.build-$name"
+	rm -rf "$cap_dir"
+	mkdir -p "$cap_dir"
+	rig_log "capture generation $name (building under ${cap_dir##*/})"
 
 	# One fresh build directory per ABI. MIPSpro's -S ignores -o (it always
 	# writes <basename>.s), and a later link in the same directory deletes
@@ -188,7 +209,8 @@ cmd_capture() {
 		ic run "cc -version" --timeout 120
 		printf '\n$ versions compiler_dev c_dev c_fe compiler_eoe irix_dev dev | cat\n'
 		ic run "versions compiler_dev c_dev c_fe compiler_eoe irix_dev dev | cat" --timeout 300
-	} >"$RIG_ORACLE_DIR/environment.txt"
+	} >"$cap_dir/environment.txt"
+	[ -s "$cap_dir/environment.txt" ] || rig_die "environment capture is empty"
 
 	rig_log "building hello with cc (o32, then n32)"
 	# Link before the -S/-c steps: the link removes stale same-basename
@@ -200,7 +222,7 @@ cmd_capture() {
 
 	local src dest
 	while read -r src dest; do
-		ic get "$src" --to "$RIG_ORACLE_DIR/$dest" --timeout 600
+		oracle_get "$src" "$cap_dir/$dest"
 	done <<'EOF'
 /tmp/oracle/o32/hello.o32 hello.o32
 /tmp/oracle/o32/hello.s hello.o32.s
@@ -220,39 +242,35 @@ EOF
 	# the manifest into tar's argument list.
 	ic run 'cd / && tar cf /tmp/sysroot.tar `cat /tmp/sysroot.files`' --timeout 900
 	ic run "gzip -f /tmp/sysroot.tar" --timeout 300
-	ic get /tmp/sysroot.tar.gz --to "$RIG_ORACLE_DIR/sysroot.tar.gz" --timeout 900
+	oracle_get /tmp/sysroot.tar.gz "$cap_dir/sysroot.tar.gz"
 
-	rm -rf "$RIG_ORACLE_DIR/sysroot"
-	mkdir -p "$RIG_ORACLE_DIR/sysroot"
-	tar -xzf "$RIG_ORACLE_DIR/sysroot.tar.gz" -C "$RIG_ORACLE_DIR/sysroot"
-	tar -tzf "$RIG_ORACLE_DIR/sysroot.tar.gz" >"$RIG_ORACLE_DIR/sysroot.manifest"
-	# Checksum the extracted tree too: the tarball proves the transfer, this
-	# proves what a later link actually reads.
-	(
-		cd "$RIG_ORACLE_DIR/sysroot"
-		find . -type f -print0 | sort -z | xargs -0 sha256sum
-	) >"$RIG_ORACLE_DIR/sysroot.sha256"
-
-	(
-		cd "$RIG_ORACLE_DIR"
-		# shellcheck disable=SC2012
-		sha256sum environment.txt hello* sysroot.tar.gz sysroot.manifest \
-			sysroot.sha256 >manifest.sha256
-	)
-	rig_log "oracle captured under $RIG_ORACLE_DIR"
+	# Confined extraction, typed attestation (content, types, symlink chains),
+	# manifest and full validation all happen in the build directory. Only a
+	# capture that passes every check is published; a failure leaves the
+	# previous generation and sysroot symlink exactly as they were.
+	python3 "$ORACLE_CAPTURE" finalise "$cap_dir"
+	python3 "$ORACLE_CAPTURE" publish "$RIG_ORACLE_DIR" "$cap_dir" "$name"
+	rig_log "oracle capture published: $RIG_ORACLE_DIR/sysroot -> generations/$name/sysroot"
 }
 
 cmd_status() {
 	local slug media products
 	while IFS=$'\t' read -r slug media products; do
-		if [ -f "$(oracle_marker "$slug")" ]; then
-			printf 'oracle-%-8s done %s\n' "$slug" "$(cat "$(oracle_marker "$slug")")"
-		else
-			printf 'oracle-%-8s pending (%s)\n' "$slug" "$media"
-		fi
+		printf 'oracle-%-8s %s\n' "$slug" "$(rig_state status "oracle-$slug")"
 	done < <(oracle_sets)
 
 	if [ -d "$RIG_ORACLE_DIR" ]; then
+		echo
+		if [ -L "$RIG_ORACLE_DIR/sysroot" ]; then
+			echo "sysroot: -> $(readlink "$RIG_ORACLE_DIR/sysroot")"
+		elif [ -d "$RIG_ORACLE_DIR/sysroot" ]; then
+			echo "sysroot: legacy directory (not generation-managed)"
+		fi
+		if [ -d "$RIG_ORACLE_DIR/generations" ]; then
+			echo "generations:"
+			# shellcheck disable=SC2012
+			ls -1 "$RIG_ORACLE_DIR/generations" | sed 's/^/  /'
+		fi
 		echo
 		ls -la "$RIG_ORACLE_DIR"
 	fi

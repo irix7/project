@@ -356,6 +356,44 @@ class FreshResetTest(RigTestCase):
         self.assert_untouched()
 
 
+class StateMarkersTest(RigTestCase):
+    """The rig_state/rig_state_marked shell helpers see the same generation."""
+
+    def test_mark_then_marked_are_generation_bound(self):
+        disk = self.root / "disks" / "irix65.raw"
+        disk.parent.mkdir()
+        disk.write_bytes(b"volume header")
+        mark = self.bash(f'source "{LIB}"; rig_state mark phase-a --postcondition test')
+        self.assertEqual(mark.returncode, 0, mark.stderr)
+        self.assertEqual(self.bash(f'source "{LIB}"; rig_state_marked phase-a').returncode, 0)
+
+        disk.write_bytes(b"a different disk")
+        stale = self.bash(f'source "{LIB}"; rig_state_marked phase-a')
+        self.assertNotEqual(stale.returncode, 0)
+        status = self.bash(f'source "{LIB}"; rig_state status phase-a')
+        self.assertIn("stale generation", status.stdout)
+
+    def test_config_change_invalidates_a_marker(self):
+        mark = self.bash(f'source "{LIB}"; rig_state mark verify --postcondition test')
+        self.assertEqual(mark.returncode, 0, mark.stderr)
+        self.config.write_text("headless = true\n")
+        result = self.bash(f'source "{LIB}"; rig_state_marked verify')
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_legacy_timestamp_marker_is_pending(self):
+        state = self.root / "state"
+        state.mkdir()
+        (state / "label.done").write_text("2026-01-01T00:00:00\n")
+        marked = self.bash(f'source "{LIB}"; rig_state_marked label')
+        self.assertNotEqual(marked.returncode, 0)
+        status = self.bash(f'source "{LIB}"; rig_state status label')
+        self.assertIn("legacy", status.stdout)
+
+    def test_absent_marker_is_pending(self):
+        status = self.bash(f'source "{LIB}"; rig_state status install')
+        self.assertEqual(status.stdout.strip(), "pending")
+
+
 class GuestLockTest(RigTestCase):
     def test_nested_lock_is_reentrant(self):
         result = self.bash(

@@ -2,7 +2,8 @@
 #
 # Bring up a fresh IRIX 6.5.7m guest on the independent rig (issue #2).
 #
-# Steps, each skipped when its marker under $RIG_STATE_DIR exists:
+# Steps, each skipped only when its generation-bound marker (disk volume
+# header + config digest) under $RIG_STATE_DIR is current:
 #
 #   1. build the rig's own iris binary (scripts/rig/build-iris.sh)
 #   2. write the rig config and an empty 20GB boot disk (scripts/rig/new-rig.sh)
@@ -58,7 +59,9 @@ provision_guest() {
 	"$RIG_REPO_ROOT/scripts/rig/build-iris.sh"
 	"$RIG_REPO_ROOT/scripts/rig/new-rig.sh"
 
-	if [ ! -f "$RIG_STATE_DIR/phase-a.done" ]; then
+	# Markers are only honoured for the disk/config generation they certify:
+	# a replaced disk or an edited config re-runs the dependent phases.
+	if ! rig_state_marked phase-a; then
 		rig_log "phase A: seeding NVRAM (headless)"
 		"$RIG_REPO_ROOT/scripts/rig/stop-rig.sh" >/dev/null 2>&1 || true
 		"$RIG_REPO_ROOT/scripts/rig/start-rig.sh" --headless
@@ -68,11 +71,11 @@ provision_guest() {
 
 	# The post-install restart reboots inside the same iris process, so labelling,
 	# the install and verification share one long-running session.
-	if [ ! -f "$RIG_STATE_DIR/verify.done" ]; then
+	if ! rig_state_marked verify; then
 		rig_running || "$RIG_REPO_ROOT/scripts/rig/start-rig.sh"
-		[ -f "$RIG_STATE_DIR/label.done" ] || rig_run_driver label
-		[ -f "$RIG_STATE_DIR/install.done" ] || rig_run_driver install
-		[ -f "$RIG_STATE_DIR/verify.done" ] || rig_run_driver verify
+		rig_state_marked label || rig_run_driver label
+		rig_state_marked install || rig_run_driver install
+		rig_state_marked verify || rig_run_driver verify
 	fi
 
 	rig_log "provisioning complete"

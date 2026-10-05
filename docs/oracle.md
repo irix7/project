@@ -64,8 +64,10 @@ scripts/rig/oracle.sh status    # markers and the captured tree
 same `Rig` class as the issue #2 install): it loads each disc with
 `cdrom-load`, mounts it at `/CDROM`, scans `/CDROM/dist`, `keep *`s to make the
 install surgical, installs the named products with `rulesoverride` on, then
-`go` and `quit`. Each completed disc is marked under `$RIG_STATE_DIR`; `--force`
-redoes them.
+`go` and `quit`. A set's marker is generation-bound (see `docs/rig.md`,
+"State markers and generations") and is written only after
+`versions <products> | cat` names every requested product; `--force` redoes
+the sets.
 
 `capture` runs `oracle/hello.c` through `cc` twice — explicit o32 and n32,
 because MIPSpro 7.3's default ABI on this guest is n32 — keeps the binaries,
@@ -74,7 +76,37 @@ objects, assembly and `-v` build transcripts, and records `uname -a`,
 file list in `scripts/rig/sysroot.files` tarred in the guest and pulled back
 with `iris-ci get`.
 
-## Captured tree
+## Capture generations and publication
+
+`capture` never writes over the current sysroot. Each run builds a fresh
+generation under `$RIG_ORACLE_DIR/generations/` and only publishes it when the
+whole capture has been retrieved, extracted, attested and re-validated:
+
+```
+$RIG_ORACLE_DIR/
+├── sysroot -> generations/sysroot-<rig-gen>-<utc-stamp>/sysroot   (symlink)
+├── current -> generations/sysroot-<rig-gen>-<utc-stamp>           (symlink)
+├── generations/
+│   ├── sysroot-<rig-gen>-<utc-stamp>/   a complete capture
+│   └── sysroot-legacy-<utc-stamp>/      archived pre-generation capture
+└── mipspro-7.3-n32-driver              locally patched driver, never committed
+```
+
+The generation name carries the rig's disk/config generation (the same
+identity `rig-state.py` uses) plus a UTC stamp, so a recapture is a new
+generation and the previous ones stay readable. A run starts in a hidden
+`.build-<name>` directory; `oracle-capture.py finalise` checks every retrieval
+is present and non-empty, extracts the tarball in confinement, writes the
+manifests and validates the result, and `publish` then renames the directory
+into place and swaps the two symlinks with a rename each. A failed compile,
+transfer, extraction or validation publishes nothing: the `sysroot` symlink
+still names the last complete generation, and the failed build directory is
+left for inspection rather than deleted. The first publication over a
+pre-generation real `sysroot/` directory moves that directory (and any loose
+evidence files beside it) into `generations/sysroot-legacy-<stamp>/` instead
+of deleting it.
+
+Each generation directory holds:
 
 | Path | What it is |
 |------|------------|
@@ -82,14 +114,36 @@ with `iris-ci get`.
 | `hello.o32`, `hello.o32.o`, `hello.o32.s`, `hello.o32.build.log`, `hello.o32.output` | o32 binary, object, assembly, transcript and recorded output |
 | `hello.n32`, `hello.n32.o`, `hello.n32.s`, `hello.n32.build.log`, `hello.n32.output` | the same for n32 |
 | `sysroot.tar.gz`, `sysroot/`, `sysroot.manifest` | headers, startfiles and libc/libm for o32, n32 and n64 |
-| `sysroot.sha256` | per-file checksums of the extracted sysroot tree |
-| `manifest.sha256` | checksums of everything above |
-| `mipspro-7.3-n32-driver` | locally patched driver, when one is in use (never committed) |
+| `sysroot.sha256` | typed attestation of the extracted sysroot tree |
+| `manifest.sha256` | content digests of everything above |
 
 The sysroot manifest is deliberately bounded: `/usr/include` plus the crt
 objects, `libc`/`libm` link libraries and their `/lib*` runtime DSOs. The
 guest's `/usr/lib*` trees also hold hundreds of product libraries; those are
 not part of this capture.
+
+## Attestation and confined extraction
+
+`sysroot.sha256` is a typed attestation, one entry per path:
+
+```
+d <path>                              a directory
+f <sha256> <path>                     a regular file's content
+l <target> <resolved> <path>          a symlink's immediate target and the
+                                      final path its complete chain resolves to
+```
+
+A chain that dangles, loops or resolves outside the tree is a validation
+error, so a published sysroot is closed under its own links. Extraction is
+confined: an absolute member name, `..` traversal, a symlink or hard link
+escaping the root, an unsupported member type (device, FIFO, socket) and a
+corrupt archive are all refused before anything is written. `manifest.sha256`
+is re-checked at publication, so a truncated or tampered retrieval cannot be
+published. The host-only tests cover each failure stage and the symlink swap:
+
+```sh
+python3 scripts/rig/test-oracle-capture.py
+```
 
 ## Known limits of this oracle
 

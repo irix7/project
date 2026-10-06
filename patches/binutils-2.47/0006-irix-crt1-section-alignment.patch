@@ -1,0 +1,83 @@
+Normalise malformed ELF section alignment for SGI inputs
+
+Upstream commit 9e6619e285873fe1cb002da4bb7749be40a5627c (Alan Modra,
+2011-04-20) changed bfd_log2 from rounding down to rounding up. Thus
+2.20.1 mapped sh_addralign 27 to alignment power 4 (16), while 2.23.2's
+round-up behaviour maps it to power 5 (32). Upstream commit
+1f9b1a84350d3755ce8620900a35c3d1997535e6 (Alan Modra, 2022-02-15) then
+changed _bfd_elf_make_section_from_shdr from bfd_log2 (sh_addralign) to
+bfd_log2 (sh_addralign & -sh_addralign), using the greatest power-of-two
+divisor for invalid ELF alignment values. For SGI IRIX crt1.o's .init
+sh_addralign of 27, the 2.47 code therefore sets alignment power 0 (1-byte
+alignment). The 2.20.1 behaviour placed output .init at 0x400560 and
+__istart at 0x40056c; 2.47's alignment 1 placed __istart at 0x40051e in
+the failing cand-h image, producing the core's EPC = BADVADDR address
+error through GOT slot 18.
+
+The ELF backend section_from_shdr callback is not used for ordinary
+SHT_PROGBITS sections. Instead, both MIPS object_p callbacks run after
+all section headers have been made into BFD sections. Under SGI_COMPAT
+only, restore the pre-change floor normalisation for malformed
+non-power-of-two sh_addralign values. Valid ELF alignments and generic
+MIPS/Linux inputs are unchanged. This covers both o32 and n32 callbacks;
+the actual malformed value occurs in the captured o32 crt1.o.
+
+Provenance: upstream binutils commits 9e6619e285873fe1cb002da4bb7749be40a5627c
+and 1f9b1a84350d3755ce8620900a35c3d1997535e6.
+
+
+--- a/bfd/elf32-mips.c
++++ b/bfd/elf32-mips.c
+@@ -3816 +3816,5 @@
+-    elf_bad_symtab (abfd) = true;
++    {
++      elf_bad_symtab (abfd) = true;
++      if (!_bfd_mips_elf_fix_section_alignments (abfd))
++	return false;
++    }
+--- a/bfd/elfn32-mips.c
++++ b/bfd/elfn32-mips.c
+@@ -3883 +3883,5 @@
+-    elf_bad_symtab (abfd) = true;
++    {
++      elf_bad_symtab (abfd) = true;
++      if (!_bfd_mips_elf_fix_section_alignments (abfd))
++	return false;
++    }
+--- a/bfd/elfxx-mips.c
++++ b/bfd/elfxx-mips.c
+@@ -13123,0 +13124,29 @@
++/* Normalise the section alignments of an SGI input file.
++
++   Upstream commit 1f9b1a84350d3755ce8620900a35c3d1997535e6 (Alan Modra,
++   2022-02-15) made _bfd_elf_make_section_from_shdr read a
++   non-power-of-two sh_addralign as its lowest set bit, so SGI's o32
++   crt1.o, whose .init has sh_addralign 27, becomes alignment 1 and the
++   loader's GOT entry for __istart lands at 2 mod 4, raising an address
++   error.  Older binutils used the largest power of two not exceeding the
++   value (16).  Restore that for SGI inputs only; valid alignments and
++   generic MIPS/Linux objects are untouched.  Modern bfd_log2 rounds up,
++   hence the -1 for a non-power value.  */
++
++bool
++_bfd_mips_elf_fix_section_alignments (bfd *abfd)
++{
++  asection *s;
++
++  for (s = abfd->sections; s != NULL; s = s->next)
++    {
++      bfd_vma align = elf_section_data (s)->this_hdr.sh_addralign;
++
++      if (align > 1 && (align & (align - 1)) != 0)
++	if (!bfd_set_section_alignment (s, bfd_log2 (align) - 1))
++	  return false;
++    }
++
++  return true;
++}
++
+--- a/bfd/elfxx-mips.h
++++ b/bfd/elfxx-mips.h
+@@ -99,0 +100,2 @@
++extern bool _bfd_mips_elf_fix_section_alignments (bfd *);
++

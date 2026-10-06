@@ -385,12 +385,13 @@ unchanged.
 
 ## Publication
 
-`irix7/binutils-gdb` receives the surviving minimal series (or the
-hunks' no-patch verdicts) as a maintainer push step; this branch does not
-push. Provenance to carry across: the pins above, SGUG-RSE
+The surviving IRIX fixes were ported to `irix7/binutils-gdb` and pushed to
+its `master` branch as
+[`bacb6cc4a4373569c2e58c47caf231bc9c0a7058`](https://github.com/irix7/binutils-gdb/commit/bacb6cc4a4373569c2e58c47caf231bc9c0a7058).
+The fork commit includes a DejaGNU regression for the IRIX dynamic tag set.
+Its provenance includes the pins above, SGUG-RSE
 `binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, the carried upstream
 commits `9e8082845f85`, `e6aea42dfa`, `a5499fa464`, `9e6619e285` and
-`1f9b1a8435`, the dropped-patch
-archaeology (`3be08ea4728b`, `c4b126b87a`, `e17b0c351f`), and this
-document as the decision record. No SGI or licence-restricted material is
-involved; binutils is GPL.
+`1f9b1a8435`, and the dropped-patch archaeology (`3be08ea4728b`,
+`c4b126b87a`, `e17b0c351f`). This document remains the project-side decision
+record. No SGI or licence-restricted material is involved; binutils is GPL.

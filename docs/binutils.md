@@ -47,17 +47,25 @@ using the generated specs file to select the assembler and linker:
 | cand-a (SGUG GOT, patch 0001) | o32 SIGBUS (138); n32 passes |
 | cand-b (`_gp`, patch 0002) | o32 SIGSEGV (139); n32 SIGSEGV |
 | cand-c (0001+0002) | o32 SIGBUS (138); n32 passes |
+| cand-d (0001+0003) | o32 SIGBUS (138); n32 passes |
+| cand-e (0001+0002+0003) | o32 SIGBUS (138); n32 passes |
 
-The integrator's root-cause lead for the o32 crash: the working 2.20.1
-output carries the `.rld_map` section and the map slot is inside the RW
-segment's zero-filled tail, while the 2.47 variants have no `.rld_map`,
-`DT_MIPS_RLD_MAP` names a slot in the `.sbss` tail, and (on the
-guest-tested binaries) the RW segment's `p_memsz` equals `p_filesz`, so
-IRIX rld's startup write to the map pointer faults. That is the
-divergence patch 0003 restores; see the archaeology below. Note that on
-this host the 2.47 links already report `p_memsz 0xa0` with the slot
-inside `.sbss`; the fix is judged by the guest, and the readelf rows
-below record both.
+The first o32 root-cause lead was `.rld_map`: the working 2.20.1 output
+carries the section and the map slot sits inside the RW segment's
+zero-filled tail, while the 2.47 variants had no `.rld_map`,
+`DT_MIPS_RLD_MAP` named a slot in the `.sbss` tail, and (on the
+guest-tested binaries) the RW segment's `p_memsz` equalled `p_filesz`.
+Patch 0003 restored the section, but cand-d/e still die with SIGBUS on
+o32, so `.rld_map` is necessary but not sufficient.
+
+The second and decisive lead is `.compact_rel`: the working 2.20.1 o32
+hello carries a 0x954-byte table (header `num=0`, body all zero: it
+reserves one 12-byte entry per counted relocation), the native MIPSpro
+reference carries 0x30 with `DT_MIPS_COMPACT_SIZE = 48`, and every 2.47
+link carries only the 0x18-byte header with no count and no tag. The
+instrumentation in "Compact relocation accounting stopped (2020)" below
+proves the count is lost to a generic ELF filter, and patch 0004
+restores it.
 
 The same o32 hello's readelf signature:
 
@@ -135,6 +143,40 @@ slot itself is still `__rld_obj_head` in `.sbss` (baseline `0x10000070`,
 candidates `0x10000068`), and both sit inside the RW segment's
 zero-filled tail on this host.
 
+### Compact relocation accounting stopped (2020)
+
+Upstream commit `c4b126b87a6cd842e567136b07ac1adca98c660f` (H.J. Lu,
+2020-06-04, PR ld/26080) made `_bfd_elf_link_iterate_on_relocs` skip
+sections without `SEC_ALLOC`, so `_bfd_mips_elf_check_relocs` no longer
+sees debug-section relocations. For IRIX that silently removed the
+`.compact_rel` accounting it had carried since the 2.20.1 era: the count
+lived in the same switch as the GOT bookkeeping and included the
+`R_MIPS_32` relocations in `.debug_*`.
+
+Instrumenting a 2.20.1 ld and a 2.47 ld on the same o32 hello link (same
+driver and inputs, `-specs` selecting each tool) settles it:
+
+- 2.20.1: `check_relocs` is called for the alloc sections and for
+  `.debug_line`, `.debug_info`, `.debug_aranges`, `.debug_ranges`,
+  `.debug_frame` and `.debug_loc`; 197 of the relocations it walks are
+  primary `R_MIPS_32` (type 2), and `compact_rel_size` reaches 2364
+  (0x93c). The final table is 0x954 with `num = 0` and a zero body.
+- 2.47: only `.text`, `.gcc_init` and `.gcc_fini` reach `check_relocs`;
+  the primary types are LO16/GOT16/HI16/CALL16/JALR/PCREL etc., no
+  accounting type is seen and `compact_rel_size` stays 0, leaving the
+  0x18-byte header. Swapping in the 2.20.1 assembler changes nothing:
+  the filter, not gas, drops the relocations.
+
+Patch 0004 restores the count for `SGI_COMPAT` output by walking the
+non-alloc sections of each input with the pre-2020 filter (alloc sections
+keep their existing accounting), counting the same relocation types into
+`compact_rel_size`. The o32 hello's table returns to 0x954 with the same
+zero body and `num = 0`, byte-identical to the 2.20.1 shape except the
+header's file offset. No `DT_MIPS_COMPACT_SIZE` hunk is carried: the
+working 2.20.1 GNU link does not emit it either (the native MIPSpro
+linker does, with 2 entries), so it is not required for a GNU-built
+executable; the tag can be revisited if the guest shows otherwise.
+
 ### GOT-local classification (SGUG 2.23, onre 2.44)
 
 `sgidevnet/sgug-rse`'s `packages/binutils/binutils2_23.sgifixes.patch`
@@ -174,8 +216,9 @@ script yet) applies with `patch -p1` from the binutils-2.47 source root:
 | `0001-irix-got-local-restoration.patch` | SGUG's forced-local GOT predicate plus the `check_forced` relocation-time half |
 | `0002-irix-gp-global-absolute.patch` | `_gp = ABSOLUTE (ALIGN (16) + 0x7ff0)` (not `HIDDEN`) in the o32 and n32 emulation scripts |
 | `0003-irix-rld-map-section.patch` | restore the `ict_irix5` `.rld_map` creation arm removed by `e6aea42dfa` |
+| `0004-irix-compact-relocs.patch` | re-count the non-alloc-section relocations into `.compact_rel` for `SGI_COMPAT` output, removed by `c4b126b87a` |
 
-Five prefixes were built in scratch for the controlled guest smoke, each
+Seven prefixes were built in scratch for the controlled guest smoke, each
 with a generated specs file (the spec routes the driver's `as`/`ld` to the
 candidate prefix as described in [toolchain.md](toolchain.md)):
 
@@ -186,25 +229,32 @@ candidate prefix as described in [toolchain.md](toolchain.md)):
 | c | 0001+0002 | `.scratch/binutils-build/prefix-cand-c` | `.scratch/binutils-build/diag/cand-c.specs` |
 | d | 0001+0003 | `.scratch/binutils-build/prefix-cand-d` | `.scratch/binutils-build/diag/cand-d.specs` |
 | e | 0001+0002+0003 | `.scratch/binutils-build/prefix-cand-e` | `.scratch/binutils-build/diag/cand-e.specs` |
+| f | 0001+0003+0004 | `.scratch/binutils-build/prefix-cand-f` | `.scratch/binutils-build/diag/cand-f.specs` |
+| g | 0001+0002+0003+0004 | `.scratch/binutils-build/prefix-cand-g` | `.scratch/binutils-build/diag/cand-g.specs` |
 
 Signatures of `oracle/hello.c` linked through each candidate (`_gp`
 binding, `.symtab`; GOT tags from `.dynamic`; o32 has MIPS_HIPAGENO, n32
 is NEWABI and has none; `.rld_map` address and the RW segment sizes from
-the candidate binutils readelf; `MIPS_RLD_MAP` is the map slot):
+the candidate binutils readelf; `MIPS_RLD_MAP` is the map slot;
+`.compact_rel` is the o32 table size, absent on n32):
 
-| candidate | ABI | `_gp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | `.rld_map` | RW fsz/msz | MIPS_RLD_MAP |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| a | o32 | LOCAL section .got | 9 | 0x9 | 7 | absent | 0x68/0xa0 | 0x10000068 |
-| a | n32 | LOCAL section .got | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
-| b | o32 | GLOBAL ABS | 13 | 0xd | 11 | absent | 0x68/0xa0 | 0x10000068 |
-| b | n32 | GLOBAL ABS | 16 | 0xd | – | absent | 0x14c/0x19c | 0x10010be0 |
-| c | o32 | GLOBAL ABS | 9 | 0x9 | 7 | absent | 0x68/0xa0 | 0x10000068 |
-| c | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
-| d | o32 | LOCAL section .got | 9 | 0x9 | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| d | n32 | LOCAL section .got | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
-| e | o32 | GLOBAL ABS | 9 | 0x9 | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| e | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | 0x14c/0x19c | 0x10010be0 |
-| 2.20.1 baseline | o32 | GLOBAL ABS | 9 | 0xb | 7 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000070 |
+| candidate | ABI | `_gp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | `.compact_rel` | `.rld_map` | RW fsz/msz | MIPS_RLD_MAP |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| a | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
+| a | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| b | o32 | GLOBAL ABS | 13 | 0xd | 11 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
+| b | n32 | GLOBAL ABS | 16 | 0xd | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| c | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
+| c | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| d | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x18 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| d | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| e | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x18 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| e | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| f | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| f | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| g | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
+| g | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
+| 2.20.1 baseline | o32 | GLOBAL ABS | 9 | 0xb | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000070 |
 
 Candidate a restores the SGUG GOT counts (9/0xb shape, 22-entry dynsym),
 but keeps `_gp` local in `.got`, exactly like onre's SIGBUS build.
@@ -212,9 +262,10 @@ Candidate b restores the classic `_gp` symbol but keeps vanilla's GOT
 classification. Candidate c combines both. Candidates d and e add the
 `.rld_map` restoration to a and c; on this host the map slot sits in the
 `.sbss` tail at `0x10000068` (the baseline has `__rld_obj_head` at
-`0x10000070`, still inside the same zero-filled region); the guest
-decides whether the restored section is what rld needs. All five pass the
-guest-free regression.
+`0x10000070`, still inside the same zero-filled region). Candidates f
+and g add the compact-relocation count to d and e and restore the 0x954
+table shape exactly (headers `num = 0`, zero bodies; only the header's
+file offset differs). All seven pass the guest-free regression.
 
 ## Host verification
 
@@ -222,7 +273,7 @@ guest-free regression.
 regression. It checks identity, o32/n32 emission (ELF headers and
 relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
 libc/libm) against a candidate binutils prefix through a generated specs
-file. All five candidates pass it with `--binutils-version 2.47`, and the
+file. All seven candidates pass it with `--binutils-version 2.47`, and the
 script still passes against 2.20.1 with `--binutils-version 2.20.1`.
 
 The prefixes and specs above are scratch artefacts (`.scratch/` is
@@ -231,16 +282,17 @@ line as the vanilla recipe plus `patch -p1` in series order.
 
 ## Guest smoke for the integrator
 
-The current round is cand-d (SGUG GOT + `.rld_map`) and cand-e (SGUG GOT
-+ `_gp` + `.rld_map`); cand-a/b/c are retained for regression comparison.
-Each run uses the existing 16.2 cross and the candidate's specs file:
+The current round is cand-f (SGUG GOT + `.rld_map` + compact relocations)
+and cand-g (`_gp` as well); cand-a..e are retained for regression
+comparison. Each run uses the existing 16.2 cross and the candidate's
+specs file:
 
 ```sh
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-e.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-g.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-e.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-g.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 
@@ -257,6 +309,6 @@ dropped.
 hunks' no-patch verdicts) as a maintainer push step; this branch does not
 push. Provenance to carry across: the pins above, SGUG-RSE
 `binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, upstream commits
-`9e8082845f85` and `3be08ea4728b`, and this document as the decision
-record. No SGI or licence-restricted material is involved; binutils is
-GPL.
+`9e8082845f85`, `e6aea42dfa`, `3be08ea4728b` and `c4b126b87a`, and this
+document as the decision record. No SGI or licence-restricted material is
+involved; binutils is GPL.

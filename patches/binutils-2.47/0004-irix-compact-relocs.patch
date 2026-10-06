@@ -1,0 +1,115 @@
+Restore the IRIX5 compact relocation accounting
+
+Upstream commit c4b126b87a6cd842e567136b07ac1adca98c660f (H.J. Lu,
+2020-06-04, PR ld/26080) made _bfd_elf_link_iterate_on_relocs skip
+non-alloc sections, so _bfd_mips_elf_check_relocs no longer sees the
+debug-section relocations that 2.20.1 counted into compact_rel_size.
+Instrumenting both linkers on the o32 hello link shows 2.20.1 counting
+197 R_MIPS_32 relocations, all from .debug_* sections (its table body is
+zero; the entries reserve space), while 2.47 counts none and ships only
+the 0x18-byte .compact_rel header. The IRIX runtime linker consumes the
+compact table, so restore the count for SGI_COMPAT inputs with the same
+filter and relocation types the pre-2020 check_relocs used, walking only
+the non-alloc sections the generic iterator now drops (alloc sections
+keep their existing accounting in check_relocs). The native MIPSpro
+linker also emits DT_MIPS_COMPACT_SIZE, but the working 2.20.1 GNU link
+does not, so no tag hunk is carried; revisit only if the guest shows the
+tag is needed. No change for non-IRIX MIPS or Linux: the helper is only
+called when SGI_COMPAT (output_bfd) holds.
+
+Effect (once cand-f/g are built): .compact_rel returns to the baseline
+size with the same reserved-entry shape; see docs/binutils.md. Guest
+validation pending.
+
+--- a/bfd/elfxx-mips.c
++++ b/bfd/elfxx-mips.c
+@@ -10037,6 +10037,79 @@
+   return true;
+ }
+ 
++/* Count the compact relocation entries for the IRIX5 .compact_rel section.
++
++   Upstream commit c4b126b87a6cd842e567136b07ac1adca98c660f (H.J. Lu,
++   2020-06-04, PR ld/26080) made _bfd_elf_link_iterate_on_relocs skip
++   non-alloc sections, so _bfd_mips_elf_check_relocs no longer sees the
++   debug-section relocations that 2.20.1 counted into compact_rel_size;
++   the section then shrinks to its 0x18-byte header and IRIX loses its
++   compact relocation table.  Count the non-alloc sections here, with the
++   same filter and relocation types the pre-2020 check used.  */
++
++static void
++mips_elf_count_compact_relocs (struct bfd_link_info *info)
++{
++  struct mips_elf_link_hash_table *htab = mips_elf_hash_table (info);
++  bfd *abfd;
++
++  for (abfd = info->input_bfds; abfd != NULL; abfd = abfd->link.next)
++    {
++      asection *o;
++
++      if ((abfd->flags & DYNAMIC) != 0
++	  || !SGI_COMPAT (abfd)
++	  || elf_object_id (abfd) != elf_hash_table_id (&htab->root)
++	  || !get_elf_backend_data (abfd)->relocs_compatible
++	       (abfd->xvec, info->output_bfd->xvec))
++	continue;
++
++      for (o = abfd->sections; o != NULL; o = o->next)
++	{
++	  Elf_Internal_Rela *relocs, *rel, *relend;
++
++	  if ((o->flags & SEC_ALLOC) != 0
++	      || (o->flags & SEC_RELOC) == 0
++	      || (o->flags & SEC_EXCLUDE) != 0
++	      || o->reloc_count == 0
++	      || ((info->strip == strip_all || info->strip == strip_debugger)
++		  && (o->flags & SEC_DEBUGGING) != 0)
++	      || bfd_is_abs_section (o->output_section))
++	    continue;
++
++	  relocs = _bfd_elf_link_info_read_relocs (abfd, info, o, NULL, NULL,
++						   false);
++	  if (relocs == NULL)
++	    continue;
++
++	  for (rel = relocs, relend = relocs + o->reloc_count;
++	       rel < relend;
++	       rel++)
++	    switch (ELF_R_TYPE (abfd, rel->r_info))
++	      {
++	      case R_MIPS_32:
++	      case R_MIPS_REL32:
++	      case R_MIPS_64:
++	      case R_MIPS_26:
++	      case R_MIPS_GPREL16:
++	      case R_MIPS_LITERAL:
++	      case R_MIPS_GPREL32:
++	      case R_MICROMIPS_26_S1:
++	      case R_MICROMIPS_GPREL16:
++	      case R_MICROMIPS_LITERAL:
++	      case R_MICROMIPS_GPREL7_S2:
++		htab->compact_rel_size += sizeof (Elf32_External_crinfo);
++		break;
++	      default:
++		break;
++	      }
++
++	  if (elf_section_data (o)->relocs != relocs)
++	    free (relocs);
++	}
++    }
++}
++
+ /* Set the sizes of the dynamic sections, some mips non-dynamic sections,
+    and check for any mips16 stub sections that we can discard.  */
+ 
+@@ -10052,6 +10125,9 @@
+   htab = mips_elf_hash_table (info);
+   BFD_ASSERT (htab != NULL);
+ 
++  if (SGI_COMPAT (info->output_bfd))
++    mips_elf_count_compact_relocs (info);
++
+   /* The .reginfo section has a fixed size.  */
+   s = bfd_get_section_by_name (info->output_bfd, ".reginfo");
+   if (s != NULL)

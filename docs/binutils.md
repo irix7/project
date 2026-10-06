@@ -49,6 +49,7 @@ using the generated specs file to select the assembler and linker:
 | cand-c (0001+0002) | o32 SIGBUS (138); n32 passes |
 | cand-d (0001+0003) | o32 SIGBUS (138); n32 passes |
 | cand-e (0001+0002+0003) | o32 SIGBUS (138); n32 passes |
+| cand-g (0001+0002+0003+0004) | o32 SIGBUS (138); n32 passes |
 
 The first o32 root-cause lead was `.rld_map`: the working 2.20.1 output
 carries the section and the map slot sits inside the RW segment's
@@ -58,14 +59,16 @@ guest-tested binaries) the RW segment's `p_memsz` equalled `p_filesz`.
 Patch 0003 restored the section, but cand-d/e still die with SIGBUS on
 o32, so `.rld_map` is necessary but not sufficient.
 
-The second and decisive lead is `.compact_rel`: the working 2.20.1 o32
-hello carries a 0x954-byte table (header `num=0`, body all zero: it
-reserves one 12-byte entry per counted relocation), the native MIPSpro
-reference carries 0x30 with `DT_MIPS_COMPACT_SIZE = 48`, and every 2.47
-link carries only the 0x18-byte header with no count and no tag. The
-instrumentation in "Compact relocation accounting stopped (2020)" below
-proves the count is lost to a generic ELF filter, and patch 0004
-restores it.
+The second lead was `.compact_rel`, but the guest disproved it as the
+crash: the working 2.20.1 o32 table's header has `num=0` and an all-zero
+body (the 0x954 bytes are over-allocation), and cand-g carries the same
+shape yet still fails o32. Patch 0004's restored count is therefore
+inert for the loader, 0004 is dropped from the series, and the native
+MIPSpro `num=2` case is a MIPSpro-only path. The dynamic-section lead
+now stands: see "`DT_MIPS_RLD_MAP_REL` was added after IRIX (2015)"
+below.
+
+The current round is **cand-h**: 0001 + 0003 + 0005, no 0002 or 0004.
 
 The same o32 hello's readelf signature:
 
@@ -143,6 +146,20 @@ slot itself is still `__rld_obj_head` in `.sbss` (baseline `0x10000070`,
 candidates `0x10000068`), and both sit inside the RW segment's
 zero-filled tail on this host.
 
+### `DT_MIPS_RLD_MAP_REL` was added after IRIX (2015)
+
+Commit `a5499fa4649e4325cf46edfff2f24dae2fe2afef` (Matthew Fortune,
+2015-06-11) added `DT_MIPS_RLD_MAP_REL` and emits it for every
+executable; the decompiled native MIPSpro linker knows
+`DT_MIPS_RLD_MAP` (0x70000016), `DT_MIPS_COMPACT_SIZE` (0x7000002f) and
+`DT_MIPS_GP_VALUE` (0x70000030) but has no `DT_MIPS_RLD_MAP_REL`
+(0x70000035). Every 2.47 o32 hello therefore carries one extra
+`.dynamic` entry (21 vs the working 2.20.1 link's 20) and a tag the
+IRIX 6.5.7 o32 loader never knew. Patch 0005 gates the tag on
+`!SGI_COMPAT (info->output_bfd)`, so SGI output keeps only
+`DT_MIPS_RLD_MAP` with the 2.20.1 dynamic layout; generic MIPS/Linux is
+unchanged.
+
 ### Compact relocation accounting stopped (2020)
 
 Upstream commit `c4b126b87a6cd842e567136b07ac1adca98c660f` (H.J. Lu,
@@ -167,15 +184,16 @@ driver and inputs, `-specs` selecting each tool) settles it:
   0x18-byte header. Swapping in the 2.20.1 assembler changes nothing:
   the filter, not gas, drops the relocations.
 
-Patch 0004 restores the count for `SGI_COMPAT` output by walking the
-non-alloc sections of each input with the pre-2020 filter (alloc sections
-keep their existing accounting), counting the same relocation types into
-`compact_rel_size`. The o32 hello's table returns to 0x954 with the same
-zero body and `num = 0`, byte-identical to the 2.20.1 shape except the
-header's file offset. No `DT_MIPS_COMPACT_SIZE` hunk is carried: the
-working 2.20.1 GNU link does not emit it either (the native MIPSpro
-linker does, with 2 entries), so it is not required for a GNU-built
-executable; the tag can be revisited if the guest shows otherwise.
+A scratch patch restored the count for `SGI_COMPAT` output by walking the
+non-alloc sections of each input with the pre-2020 filter (cand-f/g), and
+it did reproduce the 0x954 table shape. The guest then showed it inert:
+cand-g still fails o32, and the working 2.20.1 table has `num = 0` with a
+zero body, so the loader never reads those reserved bytes. The patch
+(0004) has been dropped from the series and deleted; this archaeology is
+kept because it explains the section-size difference, and because the
+native MIPSpro `num = 2` case is a MIPSpro-only path. No
+`DT_MIPS_COMPACT_SIZE` hunk is carried either: the working 2.20.1 GNU link
+does not emit it.
 
 ### GOT-local classification (SGUG 2.23, onre 2.44)
 
@@ -192,19 +210,24 @@ candidate series carries both halves, mapped to 2.47 where
 
 ### Other post-SGUG deltas
 
-- `DT_MIPS_RLD_MAP_REL` (`a5499fa464`, "Add support for
-  DT_MIPS_RLD_MAP_REL.") is emitted for every executable in 2.47 and is
-  kept: IRIX rld ignores the unknown tag, and removing it would touch
-  generic MIPS output.
+- `DT_MIPS_RLD_MAP_REL` (`a5499fa464`) is suppressed for `SGI_COMPAT`
+  output by patch 0005 (see above); generic MIPS/Linux keeps it.
 - `.MIPS.abiflags`/`PT_MIPS_ABIFLAGS` (`351cdf24d2`, "[MIPS] Implement
   O32 FPXX, FP64 and FP64A ABI extensions", 2014) is newer than the SGUG
   reference; no hunk is carried yet.
 - Modern ld no longer emits the local hidden `.dynsym` entries
   `__TMC_END__`/`__DTOR_END__` (MIPS_SYMTABNO 22 vs 24, MIPS_GOTSYM 0x9
-  vs 0xb), an as-yet unidentified generic change; no hunk is carried yet.
+  vs 0xb). A probe in the instrumented 2.47 ld shows both symbols reach
+  `mips_elf_sort_hash_table_f` with `dynindx = -1`, `forced_local = 1`
+  and `GGA_NONE`, so it returns before placing them; the 2018 commit
+  `3be08ea4728b` is *not* the cause (its hunks are `_gp_disp`-specific),
+  and the 2017 gABI sort commit `e17b0c351f` already handles forced-local
+  placement only for symbols that have an index. The open lead for
+  cand-i is therefore the earlier stage that stopped recording hidden
+  defined symbols as dynamic; no hunk is carried yet.
 
-These two remain deliberate no-patch verdicts until a candidate's guest
-smoke shows one of them matters.
+MIPS.abiflags and the local-dynsym entries remain deliberate no-patch
+verdicts until a candidate's guest smoke shows one of them matters.
 
 ## Candidate series
 
@@ -214,58 +237,37 @@ script yet) applies with `patch -p1` from the binutils-2.47 source root:
 | patch | change |
 | --- | --- |
 | `0001-irix-got-local-restoration.patch` | SGUG's forced-local GOT predicate plus the `check_forced` relocation-time half |
-| `0002-irix-gp-global-absolute.patch` | `_gp = ABSOLUTE (ALIGN (16) + 0x7ff0)` (not `HIDDEN`) in the o32 and n32 emulation scripts |
 | `0003-irix-rld-map-section.patch` | restore the `ict_irix5` `.rld_map` creation arm removed by `e6aea42dfa` |
-| `0004-irix-compact-relocs.patch` | re-count the non-alloc-section relocations into `.compact_rel` for `SGI_COMPAT` output, removed by `c4b126b87a` |
+| `0005-irix-no-rld-map-rel.patch` | suppress `DT_MIPS_RLD_MAP_REL` for `SGI_COMPAT` output (`a5499fa464`) |
 
-Seven prefixes were built in scratch for the controlled guest smoke, each
-with a generated specs file (the spec routes the driver's `as`/`ld` to the
-candidate prefix as described in [toolchain.md](toolchain.md)):
+Dropped after guest evidence and removed from the tree (git history keeps
+them): `0002` (`_gp` GLOBAL ABS; cand-b failed n32 and it did not fix
+o32) and `0004` (compact count; cand-g still failed o32 and the table is
+inert with `num = 0`). Every prefix was built in scratch with a generated
+specs file, the spec routing the driver's `as`/`ld` to the candidate
+prefix as described in [toolchain.md](toolchain.md). The current round is
+**cand-h** (`0001+0003+0005`); a..g remain for comparison.
 
-| candidate | patches | prefix | specs |
-| --- | --- | --- | --- |
-| a | 0001 | `.scratch/binutils-build/prefix-cand-a` | `.scratch/binutils-build/diag/cand-a.specs` |
-| b | 0002 | `.scratch/binutils-build/prefix-cand-b` | `.scratch/binutils-build/diag/cand-b.specs` |
-| c | 0001+0002 | `.scratch/binutils-build/prefix-cand-c` | `.scratch/binutils-build/diag/cand-c.specs` |
-| d | 0001+0003 | `.scratch/binutils-build/prefix-cand-d` | `.scratch/binutils-build/diag/cand-d.specs` |
-| e | 0001+0002+0003 | `.scratch/binutils-build/prefix-cand-e` | `.scratch/binutils-build/diag/cand-e.specs` |
-| f | 0001+0003+0004 | `.scratch/binutils-build/prefix-cand-f` | `.scratch/binutils-build/diag/cand-f.specs` |
-| g | 0001+0002+0003+0004 | `.scratch/binutils-build/prefix-cand-g` | `.scratch/binutils-build/diag/cand-g.specs` |
+Signatures of `oracle/hello.c` (`dyn` is the `.dynamic` entry count,
+`RLD_MAP/REL` the presence of `DT_MIPS_RLD_MAP`/`DT_MIPS_RLD_MAP_REL`,
+`TMC` the `__TMC_END__`/`__DTOR_END__` count in `.dynsym`,
+`.compact_rel` its size and header `num`, `_gp` from `.symtab`):
 
-Signatures of `oracle/hello.c` linked through each candidate (`_gp`
-binding, `.symtab`; GOT tags from `.dynamic`; o32 has MIPS_HIPAGENO, n32
-is NEWABI and has none; `.rld_map` address and the RW segment sizes from
-the candidate binutils readelf; `MIPS_RLD_MAP` is the map slot;
-`.compact_rel` is the o32 table size, absent on n32):
+| variant | ABI | dyn | RLD_MAP/REL | TMC | SYMTABNO | LOCAL_GOTNO | GOTSYM | `.compact_rel` | `.rld_map` | `_gp` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2.20.1 baseline | o32 | 20 | yes/no | 2 | 24 | 9 | 0xb | 0x954, num=0 | present | GLOBAL ABS |
+| 2.20.1 baseline | n32 | 20 | yes/no | 2 | 24 | 12 | 0xb | absent | absent | GLOBAL ABS |
+| cand-g | o32 | 21 | yes/yes | 0 | 22 | 9 | 0x9 | 0x954, num=0 | present | GLOBAL ABS |
+| cand-g | n32 | 21 | yes/yes | 0 | 22 | 12 | 0x9 | absent | absent | GLOBAL ABS |
+| cand-h | o32 | 20 | yes/no | 0 | 22 | 9 | 0x9 | 0x18, num=0 | present | LOCAL .got |
+| cand-h | n32 | 20 | yes/no | 0 | 22 | 12 | 0x9 | absent | absent | LOCAL .got |
 
-| candidate | ABI | `_gp` | LOCAL_GOTNO | GOTSYM | HIPAGENO | `.compact_rel` | `.rld_map` | RW fsz/msz | MIPS_RLD_MAP |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| a | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
-| a | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| b | o32 | GLOBAL ABS | 13 | 0xd | 11 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
-| b | n32 | GLOBAL ABS | 16 | 0xd | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| c | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x18 | absent | 0x68/0xa0 | 0x10000068 |
-| c | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| d | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x18 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| d | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| e | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x18 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| e | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| f | o32 | LOCAL section .got | 9 | 0x9 | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| f | n32 | LOCAL section .got | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| g | o32 | GLOBAL ABS | 9 | 0x9 | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000068 |
-| g | n32 | GLOBAL ABS | 12 | 0x9 | – | absent | absent | 0x14c/0x19c | 0x10010be0 |
-| 2.20.1 baseline | o32 | GLOBAL ABS | 9 | 0xb | 7 | 0x954 | @0x10000010, size 0 | 0x68/0xa0 | 0x10000070 |
-
-Candidate a restores the SGUG GOT counts (9/0xb shape, 22-entry dynsym),
-but keeps `_gp` local in `.got`, exactly like onre's SIGBUS build.
-Candidate b restores the classic `_gp` symbol but keeps vanilla's GOT
-classification. Candidate c combines both. Candidates d and e add the
-`.rld_map` restoration to a and c; on this host the map slot sits in the
-`.sbss` tail at `0x10000068` (the baseline has `__rld_obj_head` at
-`0x10000070`, still inside the same zero-filled region). Candidates f
-and g add the compact-relocation count to d and e and restore the 0x954
-table shape exactly (headers `num = 0`, zero bodies; only the header's
-file offset differs). All seven pass the guest-free regression.
+cand-h returns the `.dynamic` layout to the baseline (`DT_MIPS_RLD_MAP`
+only, 20 entries) on both ABIs. The remaining o32 delta is the two
+missing LOCAL HIDDEN `.dynsym` entries, which shifts SYMTABNO 24 to 22
+and GOTSYM 0xb to 0x9; the probe above shows 2.47 never gives those
+symbols an index. `_gp` is left LOCAL in `.got` (0002 not carried). Every
+candidate built so far (a..h) passes the guest-free regression.
 
 ## Host verification
 
@@ -273,8 +275,9 @@ file offset differs). All seven pass the guest-free regression.
 regression. It checks identity, o32/n32 emission (ELF headers and
 relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
 libc/libm) against a candidate binutils prefix through a generated specs
-file. All seven candidates pass it with `--binutils-version 2.47`, and the
-script still passes against 2.20.1 with `--binutils-version 2.20.1`.
+file. Every candidate built so far (a..h) passes it with
+`--binutils-version 2.47`, and the script still passes against 2.20.1 with
+`--binutils-version 2.20.1`.
 
 The prefixes and specs above are scratch artefacts (`.scratch/` is
 ignored); the in-repo series is reproducible with the same `configure`
@@ -282,17 +285,16 @@ line as the vanilla recipe plus `patch -p1` in series order.
 
 ## Guest smoke for the integrator
 
-The current round is cand-f (SGUG GOT + `.rld_map` + compact relocations)
-and cand-g (`_gp` as well); cand-a..e are retained for regression
-comparison. Each run uses the existing 16.2 cross and the candidate's
-specs file:
+The current round is **cand-h** (0001+0003+0005), with no `_gp` or
+compact hunks; cand-a..g are retained for regression comparison. Each run
+uses the existing 16.2 cross and the candidate's specs file:
 
 ```sh
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-g.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-h.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-g.specs -lm" \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-h.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 
@@ -308,7 +310,8 @@ dropped.
 `irix7/binutils-gdb` receives the surviving minimal series (or the
 hunks' no-patch verdicts) as a maintainer push step; this branch does not
 push. Provenance to carry across: the pins above, SGUG-RSE
-`binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, upstream commits
-`9e8082845f85`, `e6aea42dfa`, `3be08ea4728b` and `c4b126b87a`, and this
+`binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, the carried upstream
+commits `9e8082845f85`, `e6aea42dfa` and `a5499fa464`, the dropped-patch
+archaeology (`3be08ea4728b`, `c4b126b87a`, `e17b0c351f`), and this
 document as the decision record. No SGI or licence-restricted material is
 involved; binutils is GPL.

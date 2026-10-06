@@ -15,6 +15,7 @@ The project rebuilds IRIX 6.5.7m with a modern GCC. The first deliverable is the
 | `scripts/smoke.sh` | The smoke harness |
 | `scripts/rig/` | The guest install and control scripts |
 | `scripts/runtime/` | The libc and libm rebuild scripts |
+| `scripts/irix-media/` | Read-only EFS readers for the IRIX CD images |
 | `oracle/` | The reference test programs |
 | `docs/` | The project documents |
 | `docs/adr/` | The project decisions |

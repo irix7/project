@@ -1,0 +1,20 @@
+[
+ [
+  "/path/to/IRIX Foundation 1.iso",
+  "/dist/eoe.sw",
+  "usr/include/sys/gfx.h",
+  14001,
+  28960,
+  40336,
+  210032158
+ ],
+ [
+  "/path/to/IRIX Foundation 1.iso",
+  "/dist/eoe.sw",
+  "var/sysgen/master.d/gfx",
+  0,
+  566,
+  26505,
+  244369071
+ ]
+]

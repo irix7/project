@@ -3,15 +3,21 @@
 # scripts/build-toolchain.sh still builds the 2.47 vanilla recipe. These
 # patches are the re-derived IRIX fixes built and handed to the
 # integrator for the controlled guest smoke; see docs/binutils.md for the
-# candidate prefixes, signatures and provenance. Once a candidate passes
-# o32 and n32 on the guest, the selector's 2.47 recipe moves from
-# `vanilla` to this series and any unused candidate patch is dropped.
+# prefixes, signatures and provenance. Once a candidate passes o32 and
+# n32 on the guest, the selector's 2.47 recipe moves from `vanilla` to
+# this series.
 #
 # Apply with `patch -p1` from the binutils-2.47 source root, in order.
 # Provenance: SGUG-RSE binutils2_23.sgifixes.patch, onre/binutils-gdb
 # binutils-2_44-irix (4b55be5884a3) and upstream commits 9e8082845f85,
-# e6aea42dfa, 3be08ea4728b and c4b126b87a.
+# e6aea42dfa and a5499fa464.
+#
+# Not carried; removed from the tree, kept in git history:
+#   0002-irix-gp-global-absolute.patch: guest cand-b (0002 alone) failed
+#     n32, and it did not fix o32.
+#   0004-irix-compact-relocs.patch: guest cand-g still failed o32; the
+#     working baseline's .compact_rel has num=0, so the reserved space is
+#     inert to the loader.
 0001-irix-got-local-restoration.patch
-0002-irix-gp-global-absolute.patch
 0003-irix-rld-map-section.patch
-0004-irix-compact-relocs.patch
+0005-irix-no-rld-map-rel.patch

@@ -1,0 +1,31 @@
+Suppress DT_MIPS_RLD_MAP_REL for IRIX output
+
+The decompiled native MIPSpro linker knows DT_MIPS_RLD_MAP (0x70000016),
+DT_MIPS_COMPACT_SIZE (0x7000002f) and DT_MIPS_GP_VALUE (0x70000030) but
+has no DT_MIPS_RLD_MAP_REL (0x70000035); the tag was added upstream in
+a5499fa4649e4325cf46edfff2f24dae2fe2afef (Matthew Fortune, 2015-06-11,
+"Add support for DT_MIPS_RLD_MAP_REL.") for PIE debugging. IRIX 6.5.7's
+o32 loader predates it, and 2.47 emits it unconditionally for
+executables, so every 2.47 o32 hello's .dynamic carries one extra entry
+(21 vs the working 2.20.1 link's 20). Gate the tag on !SGI_COMPAT so IRIX
+output keeps only DT_MIPS_RLD_MAP with the 2.20.1 dynamic layout; generic
+MIPS/Linux keeps the tag unchanged.
+
+Effect (cand-h): .dynamic back to 20 entries, DT_MIPS_RLD_MAP only;
+see docs/binutils.md. Guest validation pending.
+
+--- a/bfd/elfxx-mips.c
++++ b/bfd/elfxx-mips.c
+@@ -10285,7 +10285,12 @@
+ 	  && !MIPS_ELF_ADD_DYNAMIC_ENTRY (info, DT_MIPS_RLD_MAP, 0))
+ 	return false;
+ 
++      /* IRIX 6.5's o32 loader predates DT_MIPS_RLD_MAP_REL (added in
++	 2015); emitting it pushes .dynamic past the 2.20.1 layout and
++	 the loader rejects the executable at startup.  Keep the tag for
++	 generic MIPS/Linux and leave SGI output at DT_MIPS_RLD_MAP.  */
+       if (bfd_link_executable (info)
++	  && !SGI_COMPAT (info->output_bfd)
+ 	  && !MIPS_ELF_ADD_DYNAMIC_ENTRY (info, DT_MIPS_RLD_MAP_REL, 0))
+ 	return false;
+ 

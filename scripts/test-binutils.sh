@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Guest-free regression for a vanilla GNU binutils release driving the IRIX
+# Guest-free regression for a GNU binutils release driving the IRIX
 # cross (issue #21). It proves the o32 and n32 emission and link paths work
 # when the cross GCC's assembler and linker are the candidate binutils
 # build, and it inspects the resulting ELF headers, relocations, startfiles
@@ -32,7 +32,7 @@
 # configured sysroot is absent, and the whole script skips cleanly when the
 # prefixes are absent. No guest, no rig and no SGI artefact is required.
 #
-# Usage: scripts/test-binutils-vanilla.sh [options]
+# Usage: scripts/test-binutils.sh [options]
 #
 #   --gcc-prefix DIR        cross prefix (default $IRIX_PREFIX, then
 #                           <repo>/.scratch/toolchain-16.2.0/prefix)
@@ -64,9 +64,9 @@ CHECK_IRIX_CRT1_ALIGNMENT=0
 
 usage() {
 	cat <<'EOF'
-Usage: scripts/test-binutils-vanilla.sh [options]
+Usage: scripts/test-binutils.sh [options]
 
-Check that a candidate vanilla GNU binutils release drives the IRIX cross
+Check that a candidate GNU binutils release drives the IRIX cross
 for o32 and n32: identity, emission (ELF headers and relocations) and link
 (startfiles, interpreter and dependencies). See the script header.
 
@@ -330,4 +330,4 @@ link_probe() {
 link_probe o32 32 /usr/lib/libc.so.1
 link_probe n32 n32 /usr/lib32/libc.so.1
 
-echo "all binutils vanilla checks passed"
+echo "all binutils checks passed"

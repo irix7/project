@@ -1,14 +1,11 @@
 # Binutils for the IRIX cross (issue #21)
 
 `scripts/build-toolchain.sh` builds GNU binutils 2.47 for
-`mips-sgi-irix6.5`; vanilla-first was tried and **rejected in the
-controlled guest smoke** (a vanilla 2.47 o32 hello dies at startup), so a
-re-derived IRIX series now lives in `patches/binutils-2.47/` as a
-candidate under guest validation. Until a candidate passes o32 and n32 in
-the guest, the selector still builds the vanilla recipe and
-`--binutils 2.20.1` remains the known-good pdaxrom seed fallback. This
-document records the pins, the in-guest divergence, the upstream
-archaeology and the candidate signatures.
+`mips-sgi-irix6.5` with the selected IRIX series in
+`patches/binutils-2.47/`. Vanilla 2.47 fails the controlled guest smoke;
+the selected cand-k series passes o32 and n32. `--binutils 2.20.1` remains
+the unchanged pdaxrom seed fallback. This document records the pins, guest
+evidence, upstream archaeology and candidate signatures.
 
 ## Pin and provenance
 
@@ -50,6 +47,13 @@ using the generated specs file to select the assembler and linker:
 | cand-d (0001+0003) | o32 SIGBUS (138); n32 passes |
 | cand-e (0001+0002+0003) | o32 SIGBUS (138); n32 passes |
 | cand-g (0001+0002+0003+0004) | o32 SIGBUS (138); n32 passes |
+| cand-j (0003+0006) | o32 SIGSEGV (139); n32 SIGSEGV (139) |
+| cand-k (0001+0003+0005+0006) | passes o32 and n32; expected output on both |
+
+cand-k printed `hello from MIPSpro` and `sqrt(2) = 1.414214` in both
+controlled guest smokes. It is the proven default recipe. cand-j's restored
+alignment alone is insufficient; retain patch 0001's GOT fix and 0005's
+suppression of `DT_MIPS_RLD_MAP_REL` in the selected set.
 
 The first o32 root-cause lead was `.rld_map`: the working 2.20.1 output
 carries the section and the map slot sits inside the RW segment's
@@ -269,10 +273,10 @@ candidate series carries both halves, mapped to 2.47 where
 MIPS.abiflags and the local-dynsym entries remain deliberate no-patch
 verdicts until a candidate's guest smoke shows one of them matters.
 
-## Candidate series
+## Selected series
 
-`patches/binutils-2.47/series` (candidate only; not selected by the build
-script yet) applies with `patch -p1` from the binutils-2.47 source root:
+`patches/binutils-2.47/series` is the selected binutils 2.47 recipe and
+applies with `patch -p1` from the binutils-2.47 source root:
 
 | patch | change |
 | --- | --- |
@@ -286,9 +290,10 @@ them): `0002` (`_gp` GLOBAL ABS; cand-b failed n32 and it did not fix
 o32) and `0004` (compact count; cand-g still failed o32 and the table is
 inert with `num = 0`). Every prefix was built in scratch with a generated
 specs file, the spec routing the driver's `as`/`ld` to the candidate
-prefix as described in [toolchain.md](toolchain.md). The current guest-smoke
-round is **cand-j** (`0003+0006`) followed by **cand-k**
-(`0001+0003+0005+0006`); cand-a..h remain for comparison.
+prefix as described in [toolchain.md](toolchain.md). cand-j
+(`0003+0006`) is retained as the failed minimal comparison; cand-k
+(`0001+0003+0005+0006`) is the selected passing set. cand-a..h remain for
+historical comparison.
 
 Signatures of `oracle/hello.c` (`dyn` is the `.dynamic` entry count,
 `RLD_MAP/REL` the presence of `DT_MIPS_RLD_MAP`/`DT_MIPS_RLD_MAP_REL`,
@@ -312,7 +317,7 @@ symbols an index. `_gp` is left LOCAL in `.got` (0002 not carried). This
 table is historical; the current candidates' complete start/alignment and
 dynamic signatures are below.
 
-The guest-free candidate signatures are:
+The host-linked signatures and controlled guest results are:
 
 | candidate | ABI | `.init` address / alignment | `__istart` | dyn | `MIPS_LOCAL_GOTNO/GOTSYM/SYMTABNO/HIPAGENO` | `RLD_MAP/REL` | `.rld_map` section | `.compact_rel` |
 | --- | --- | --- | ---: | ---: | --- | --- | --- | --- |
@@ -320,6 +325,8 @@ The guest-free candidate signatures are:
 | cand-j (`0003+0006`) | n32 | `0x10000574` / 4 | `0x10000580` | 21 | `16 / 0xd / 22 / n/a` | yes/yes | absent | absent |
 | cand-k (`0001+0003+0005+0006`) | o32 | `0x00400550` / 16 | `0x0040055c` | 20 | `9 / 0x9 / 22 / 7` | yes/no | present at `0x10000010` | 0x18; id1=1, num=0, id2=2, offset=0x1244, reserved=0 |
 | cand-k (`0001+0003+0005+0006`) | n32 | `0x1000056c` / 4 | `0x10000578` | 20 | `12 / 0x9 / 22 / n/a` | yes/no | absent | absent |
+
+Guest outcome: cand-j fails both ABIs with exit 139; cand-k passes both.
 
 `DT_MIPS_RLD_MAP` is present in all four images (o32 slot `0x10000068`,
 n32 slot `0x10010be0`). The n32 images have no `.rld_map` marker section;
@@ -337,25 +344,26 @@ Candidate prefixes and specs for guest smoke:
 
 ## Host verification
 
-`scripts/test-binutils-vanilla.sh` remains the committed, guest-free
+`scripts/test-binutils.sh` is the committed, guest-free
 regression. It checks identity, o32/n32 emission (ELF headers and
 relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
 libc/libm) against a candidate binutils prefix through a generated specs
-file. The updated `--check-irix-crt1-alignment` option additionally requires
+file. The `--check-irix-crt1-alignment` option additionally requires
 o32 `.init` alignment of at least 16, n32 alignment of at least 4, aligned
 section addresses, and 4-byte-aligned `__istart`. Both cand-j and cand-k
-pass all host checks with `--binutils-version 2.47`; guest validation is
-pending. The script also retains its vanilla and 2.20.1 modes.
+pass all host checks with `--binutils-version 2.47`; cand-k additionally
+passes both controlled guest smokes. The script also retains its baseline
+and 2.20.1 modes.
 
 The prefixes and specs above are scratch artefacts (`.scratch/` is
-ignored); the in-repo series is reproducible with the same `configure`
-line as the vanilla recipe plus `patch -p1` in series order.
+ignored); the in-repo series is reproducibly applied in manifest order by
+`scripts/build-toolchain.sh`.
 
-## Guest smoke for the integrator
+## Selected Recipe
 
-Run cand-j first, then cand-k, for o32 and n32. These are guest commands
-for the integrator; no guest command has been run in this work session.
-Each run uses the existing 16.2 cross and candidate specs:
+The candidate guest smokes are complete. cand-k is the selected recipe;
+cand-j remains available for comparison. To reproduce the guest tests with
+the existing 16.2 cross and specs:
 
 ```sh
 scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix \
@@ -372,12 +380,8 @@ scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix --abi n32 \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 
-The integrator runs the controlled guest smoke; a candidate must pass o32
-and n32 before it is folded in. If a candidate passes, the selector's 2.47
-recipe moves from `vanilla` to this series, `scripts/lib/test-build-identity.py`
-is updated for the recipe name, `scripts/test-binutils-vanilla.sh` naming
-and docs follow the patched 2.47, and the unused candidate patches are
-dropped.
+The 2.47 selector now uses this series. The 2.20.1 pdaxrom recipe remains
+unchanged.
 
 ## Publication
 

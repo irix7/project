@@ -1,11 +1,9 @@
-# Binutils 2.47 IRIX series (issue #21): candidate, not yet selected.
+# Binutils 2.47 IRIX series (issue #21): selected, guest-validated recipe.
 #
-# scripts/build-toolchain.sh still builds the 2.47 vanilla recipe. These
-# patches are the re-derived IRIX fixes built and handed to the
-# integrator for the controlled guest smoke; see docs/binutils.md for the
-# prefixes, signatures and provenance. Once a candidate passes o32 and
-# n32 on the guest, the selector's 2.47 recipe moves from `vanilla` to
-# this series.
+# scripts/build-toolchain.sh applies these patches in order for binutils
+# 2.47. cand-j (0003+0006) failed o32 and n32; cand-k (the series below)
+# passed both controlled guest smokes. See docs/binutils.md for signatures
+# and archaeology.
 #
 # Apply with `patch -p1` from the binutils-2.47 source root, in order.
 # Provenance: SGUG-RSE binutils2_23.sgifixes.patch, onre/binutils-gdb

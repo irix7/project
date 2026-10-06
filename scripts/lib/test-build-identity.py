@@ -626,13 +626,18 @@ class BuildToolchainEndToEndTest(TempDirTest):
         digest() { binutils_identity "$@" | irix_identity_digest; }
         BINUTILS_VERSION=2.47
         BINUTILS_SHA256=154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
-        BINUTILS_RECIPE=vanilla
+        BINUTILS_RECIPE=series
+        BINUTILS_SERIES_FILE="$2/series"
+        patches=$(irix_series_patches "$BINUTILS_SERIES_FILE")
+        mapfile -t BINUTILS_SERIES_PATCHES <<<"$patches"
         BINUTILS_PATCHES=()
-        vanilla=$(digest --prefix=/p --target=mips-sgi-irix6.5)
-        vanilla_again=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        series=$(digest --prefix=/p --target=mips-sgi-irix6.5)
+        series_again=$(digest --prefix=/p --target=mips-sgi-irix6.5)
         BINUTILS_VERSION=2.20.1
         BINUTILS_SHA256=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64
         BINUTILS_RECIPE=pdaxrom
+        BINUTILS_SERIES_FILE=
+        BINUTILS_SERIES_PATCHES=()
         BINUTILS_PATCHES=(
           "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
           "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
@@ -646,17 +651,36 @@ class BuildToolchainEndToEndTest(TempDirTest):
         )
         configure=$(digest --prefix=/q --target=mips-sgi-irix6.5)
         printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \
-          "$vanilla" "$vanilla_again" "$pdaxrom" "$chunked" "$configure"
+          "$series" "$series_again" "$pdaxrom" "$chunked" "$configure"
         """
     )
 
     def test_binutils_identity_tracks_version_recipe_patches_and_options(self):
-        result = run_bash(self.BINUTILS_IDENTITY_DRIVER, BUILD_TOOLCHAIN)
-        vanilla, vanilla_again, pdaxrom, chunked, configure = result.stdout.split()
-        self.assertEqual(vanilla, vanilla_again)
-        self.assertEqual(
-            len({vanilla, pdaxrom, chunked, configure}), 4
-        )
+        series_dir = self.tmp / "binutils-series"
+        series_dir.mkdir()
+        first = series_dir / "0001-first.patch"
+        second = series_dir / "0002-second.patch"
+        first.write_text("first patch bytes\n")
+        second.write_text("second patch bytes\n")
+        manifest = series_dir / "series"
+        manifest.write_text("0001-first.patch\n0002-second.patch\n")
+
+        def identity():
+            result = run_bash(
+                self.BINUTILS_IDENTITY_DRIVER, BUILD_TOOLCHAIN, series_dir
+            )
+            return result.stdout.split()
+
+        series, repeated, pdaxrom, chunked, configure = identity()
+        self.assertEqual(series, repeated)
+        self.assertEqual(len({series, pdaxrom, chunked, configure}), 4)
+
+        manifest.write_text("0002-second.patch\n0001-first.patch\n")
+        self.assertNotEqual(identity()[0], series)
+
+        manifest.write_text("0001-first.patch\n0002-second.patch\n")
+        second.write_text("changed second patch bytes\n")
+        self.assertNotEqual(identity()[0], series)
 
     RECIPE_DRIVER = textwrap.dedent(
         """\
@@ -665,6 +689,7 @@ class BuildToolchainEndToEndTest(TempDirTest):
         BINUTILS_VERSION=2.47
         resolve_binutils_recipe
         echo "2.47 ${BINUTILS_RECIPE} ${BINUTILS_TARBALL} ${#BINUTILS_PATCHES[@]} ${BINUTILS_SHA256}"
+        printf '%s\\n' "${BINUTILS_SERIES_PATCHES[@]##*/}"
         BINUTILS_VERSION=2.20.1
         resolve_binutils_recipe
         echo "2.20.1 ${BINUTILS_RECIPE} ${BINUTILS_TARBALL} ${#BINUTILS_PATCHES[@]} ${BINUTILS_SHA256}"
@@ -678,24 +703,36 @@ class BuildToolchainEndToEndTest(TempDirTest):
         lines = result.stdout.splitlines()
         self.assertEqual(
             lines[0],
-            "2.47 vanilla binutils-2.47.tar.xz 0 "
+            "2.47 series binutils-2.47.tar.xz 0 "
             "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff",
         )
         self.assertEqual(
-            lines[1],
+            lines[1:5],
+            [
+                "0001-irix-got-local-restoration.patch",
+                "0003-irix-rld-map-section.patch",
+                "0005-irix-no-rld-map-rel.patch",
+                "0006-irix-crt1-section-alignment.patch",
+            ],
+        )
+        self.assertEqual(
+            lines[5],
             "2.20.1 pdaxrom binutils-2.20.1.tar.bz2 2 "
             "71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d9717c8ed64",
         )
-        self.assertEqual(lines[2], "2.99 refused")
+        self.assertEqual(lines[6], "2.99 refused")
 
-    VANILLA_BINUTILS_DRIVER = textwrap.dedent(
+    SERIES_BINUTILS_DRIVER = textwrap.dedent(
         """\
         set -euo pipefail
         source "$1"
         BINUTILS_VERSION=2.47
         BINUTILS_TARBALL="binutils-2.47.tar.xz"
         BINUTILS_SHA256=deadbeef
-        BINUTILS_RECIPE=vanilla
+        BINUTILS_RECIPE=series
+        BINUTILS_SERIES_FILE="$9"
+        patches=$(irix_series_patches "$BINUTILS_SERIES_FILE")
+        mapfile -t BINUTILS_SERIES_PATCHES <<<"$patches"
         BINUTILS_PATCHES=()
         IRIX_SYSROOT=
         TARGET=mips-sgi-irix6.5
@@ -718,14 +755,27 @@ class BuildToolchainEndToEndTest(TempDirTest):
         export PATH="$FAKEBIN:$PATH"
         fetch() { :; }
         fetch_patches() { echo "fetch_patches called" >> "$FAKE_LOG"; }
-        irix_apply_patches() { echo "irix_apply_patches called" >> "$FAKE_LOG"; }
         build_binutils
         build_binutils
         """
     )
 
-    def test_vanilla_binutils_build_fetches_no_patches_and_stamps_the_recipe(self):
+    def test_series_binutils_build_applies_ordered_patches_and_stamps_recipe(self):
         self.work.mkdir(exist_ok=True)
+        binutils_series = self.tmp / "binutils-series"
+        binutils_series.mkdir()
+        (binutils_series / "series").write_text(
+            "0001-stage.patch\n0002-finish.patch\n"
+        )
+        (binutils_series / "0001-stage.patch").write_text(
+            "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-old\n+middle\n"
+        )
+        (binutils_series / "0002-finish.patch").write_text(
+            "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-middle\n+new\n"
+        )
+        source = self.work / "src" / "binutils-2.47"
+        source.mkdir(parents=True)
+        (source / "test.txt").write_text("old\n")
         write_exe(
             self.fakebin / "make",
             textwrap.dedent(
@@ -747,9 +797,9 @@ class BuildToolchainEndToEndTest(TempDirTest):
             ),
         )
         env = dict(self.env)
-        env["FAKE_LOG"] = str(self.tmp / "vanilla.log")
+        env["FAKE_LOG"] = str(self.tmp / "series.log")
         result = run_bash(
-            self.VANILLA_BINUTILS_DRIVER,
+            self.SERIES_BINUTILS_DRIVER,
             BUILD_TOOLCHAIN,
             self.work / "prefix",
             self.work / "stamps",
@@ -758,14 +808,28 @@ class BuildToolchainEndToEndTest(TempDirTest):
             self.work / "downloads",
             self.work / "src",
             self.fakebin,
+            binutils_series / "series",
             env=env,
         )
         self.assertEqual(result.stdout.count("binutils 2.47 already installed"), 1)
-        self.assertFalse((self.tmp / "vanilla.log").exists())
+        self.assertFalse((self.tmp / "series.log").exists())
         identity = (self.work / "stamps" / "binutils.installed.identity").read_text()
         self.assertIn("version=2.47", identity)
-        self.assertIn("recipe=vanilla", identity)
-        self.assertIn("patches:\nconfigure:", identity)
+        self.assertIn("recipe=series", identity)
+        first_hash = sha256_file(binutils_series / "0001-stage.patch")
+        second_hash = sha256_file(binutils_series / "0002-finish.patch")
+        self.assertIn(
+            f"patches:\n{first_hash}  0001-stage.patch\n"
+            f"{second_hash}  0002-finish.patch\nconfigure:",
+            identity,
+        )
+        self.assertEqual((source / "test.txt").read_text(), "new\n")
+        for patch_name in ("0001-stage.patch", "0002-finish.patch"):
+            marker = source / ".irix-patched.d" / f"{patch_name}.sha256"
+            self.assertEqual(
+                marker.read_text().strip(),
+                sha256_file(binutils_series / patch_name),
+            )
 
     def test_binutils_completion_record_captures_the_installed_outputs(self):
         self.work.mkdir(exist_ok=True)
@@ -851,6 +915,10 @@ class ScriptInvocationTest(TempDirTest):
     def test_direct_invocation_defaults_under_the_repo_scratch(self):
         fake_repo = self.tmp / "fake-repo"
         (fake_repo / "scripts" / "lib").mkdir(parents=True)
+        shutil.copytree(
+            REPO_ROOT / "patches" / "binutils-2.47",
+            fake_repo / "patches" / "binutils-2.47",
+        )
         shutil.copy(BUILD_TOOLCHAIN, fake_repo / "scripts" / "build-toolchain.sh")
         shutil.copy(LIB, fake_repo / "scripts" / "lib" / "build-identity.sh")
         result = self._run(
@@ -890,11 +958,11 @@ class ScriptInvocationTest(TempDirTest):
         self.assertNotIn("another GCC release", result.stderr)
         self.assertTrue(self.curl_log.exists(), "fetch was never attempted")
 
-    def test_binutils_selector_defaults_to_vanilla_247(self):
+    def test_binutils_selector_defaults_to_series_247(self):
         work = self.tmp / "work"
         result = self._run("--gcc", "15.3.0", "--work-dir", work)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("binutils: 2.47 (vanilla recipe)", result.stdout)
+        self.assertIn("binutils: 2.47 (series recipe)", result.stdout)
 
     def test_binutils_selector_accepts_the_fallback_recipe(self):
         work = self.tmp / "work"

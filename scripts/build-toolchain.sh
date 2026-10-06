@@ -2,11 +2,11 @@
 #
 # Build the IRIX 6.5 cross toolchain.
 #
-# By default this builds the GCC 16.2 IRIX port: vanilla upstream binutils
-# 2.47 plus the in-repo GCC 16.2 series (patches/gcc-16.2/), re-derived
+# By default this builds the GCC 16.2 IRIX port: the in-repo binutils 2.47
+# IRIX series plus the in-repo GCC 16.2 series (patches/gcc-16.2/), re-derived
 # from pdaxrom/irix-gcc tag 1.2's 15.2 IRIX diff:
 #
-#   * binutils 2.47 (GNU release, no patches; see docs/binutils.md)
+#   * binutils 2.47 with the in-repo IRIX series (patches/binutils-2.47/)
 #   * GCC 16.2.0 with the in-repo IRIX series
 #   * the local patches/ deltas that a sysroot-less host needs
 #
@@ -50,7 +50,7 @@
 #   --sysroot DIR    target sysroot; enables libstdc++ if it is set
 #   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
 #   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
-#   --binutils VER   binutils release: 2.47 (default, vanilla) or 2.20.1
+#   --binutils VER   binutils release: 2.47 (default, IRIX series) or 2.20.1
 #                    (pdaxrom patches, seed fallback)
 #   --clean          remove the work directory before building
 #   -h, --help       show this help
@@ -66,9 +66,9 @@ set -euo pipefail
 
 TARGET=mips-sgi-irix6.5
 
-# GNU binutils releases this script knows how to build. 2.47 is the vanilla
-# upstream release (recipe `vanilla`, no patches); 2.20.1 is the
-# pdaxrom-patched seed fallback (recipe `pdaxrom`), kept for bisecting. The
+# GNU binutils releases this script knows how to build. 2.47 uses the in-repo
+# IRIX series (recipe `series`); 2.20.1 is the pdaxrom-patched seed fallback
+# (recipe `pdaxrom`), kept for bisecting. The
 # sha256 values are pinned from the official release tarballs after
 # verifying them against the official sha512 list
 # (https://sourceware.org/pub/binutils/releases/sha512.sum).
@@ -89,8 +89,7 @@ PDAXROM_COMMIT=2aa3421b4b4b9f8962cdd864243d82d7a458fcff
 PDAXROM_RAW="https://raw.githubusercontent.com/pdaxrom/irix-gcc/${PDAXROM_COMMIT}/files"
 
 # The 2.20.1 recipe's pdaxrom patches (name:sha256 pairs, downloaded from
-# PDAXROM_RAW). 2.47 is vanilla and carries none; see docs/binutils.md for
-# why the pdaxrom deltas are not ported forward without guest evidence.
+# PDAXROM_RAW). Binutils 2.47 uses its in-repo series below.
 BINUTILS_2_20_1_PATCHES=(
   "binutils-2.20.1-irix.diff:58ceeddf3ce3eda038a63f2b534d77bee540893619b67b06bfad095cef87ceee"
   "binutils-2.20.1-arm64-build-fix.diff:c932f55fce87bc8ac9735a3dc238c9bc614515c79f20a903c2a8b3b91398497f"
@@ -106,6 +105,9 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 
 # shellcheck source=scripts/lib/build-identity.sh
 source "${SCRIPT_DIR}/lib/build-identity.sh"
+
+# The proven binutils 2.47 IRIX patch series; the manifest defines apply order.
+BINUTILS_SERIES_DIR=${REPO_ROOT}/patches/binutils-2.47
 
 # The in-repo GCC 16.2 series; see patches/gcc-16.2/series and docs/toolchain.md.
 GCC_SERIES_DIR=${REPO_ROOT}/patches/gcc-16.2
@@ -127,9 +129,9 @@ CLEAN=0
 
 usage() {
 	cat <<'EOF'
-Build the IRIX 6.5 cross toolchain (binutils 2.47 + GCC 16.2.0 by
+Build the IRIX 6.5 cross toolchain (patched binutils 2.47 + GCC 16.2.0 by
 default) targeting mips-sgi-irix6.5 with big-endian o32, n32 and n64
-multilibs. Binutils 2.47 is the vanilla GNU release; --binutils 2.20.1
+multilibs. Binutils 2.47 uses the in-repo IRIX series; --binutils 2.20.1
 selects the pdaxrom-patched seed fallback. The gcc-16.2 IRIX series is
 in-repo; --gcc selects the 15.3.0 or 15.2.0 pdaxrom fallback recipe.
 
@@ -142,7 +144,7 @@ Usage: scripts/build-toolchain.sh [options]
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
-  --binutils VER   binutils release: 2.47 (default, vanilla) or 2.20.1
+  --binutils VER   binutils release: 2.47 (default, IRIX series) or 2.20.1
                    (pdaxrom patches, seed fallback)
   --clean          remove the work directory before building
   -h, --help       show this help
@@ -180,22 +182,28 @@ parse_args() {
 	done
 }
 
-# resolve_binutils_recipe: 2.47 is the vanilla upstream release; 2.20.1 is
-# the pdaxrom-patched seed fallback. The tarball name, pinned sha256, recipe
-# name and patch list are per release, so identity and reuse distinguish
-# them.
+# resolve_binutils_recipe: 2.47 uses the in-repo IRIX series; 2.20.1 is the
+# pdaxrom-patched seed fallback. The tarball name, pinned sha256, recipe name
+# and patch list are per release, so identity and reuse distinguish them.
 resolve_binutils_recipe() {
+	local patches
+	BINUTILS_SERIES_PATCHES=()
 	case "$BINUTILS_VERSION" in
 		2.47)
 			BINUTILS_SHA256=$BINUTILS_SHA256_2_47
-			BINUTILS_RECIPE=vanilla
+			BINUTILS_RECIPE=series
 			BINUTILS_TARBALL=binutils-2.47.tar.xz
+			BINUTILS_SERIES_FILE=${BINUTILS_SERIES_DIR}/series
 			BINUTILS_PATCHES=()
+			patches=$(irix_series_patches "$BINUTILS_SERIES_FILE")
+			[ -n "$patches" ] || die "empty binutils series: ${BINUTILS_SERIES_FILE}"
+			mapfile -t BINUTILS_SERIES_PATCHES <<<"$patches"
 			;;
 		2.20.1)
 			BINUTILS_SHA256=$BINUTILS_SHA256_2_20_1
 			BINUTILS_RECIPE=pdaxrom
 			BINUTILS_TARBALL=binutils-2.20.1.tar.bz2
+			BINUTILS_SERIES_FILE=
 			BINUTILS_PATCHES=("${BINUTILS_2_20_1_PATCHES[@]}")
 			;;
 		*)
@@ -334,7 +342,11 @@ binutils_identity() {
 	printf 'tarball_sha256=%s\n' "$BINUTILS_SHA256"
 	printf 'recipe=%s\n' "$BINUTILS_RECIPE"
 	printf 'patches:\n'
-	irix_pinned_patch_identity "${BINUTILS_PATCHES[@]}"
+	if [ "$BINUTILS_RECIPE" = series ]; then
+		irix_patch_identity "${BINUTILS_SERIES_PATCHES[@]}"
+	else
+		irix_pinned_patch_identity "${BINUTILS_PATCHES[@]}"
+	fi
 	printf 'configure:\n'
 	printf '%s\n' "$@"
 }
@@ -398,7 +410,9 @@ build_binutils() {
 		"${DOWNLOADS}/${BINUTILS_TARBALL}" "$BINUTILS_SHA256"
 	extract "${DOWNLOADS}/${BINUTILS_TARBALL}" "binutils-${BINUTILS_VERSION}"
 	local src="${SRC_DIR}/binutils-${BINUTILS_VERSION}"
-	if [ "$BINUTILS_RECIPE" = pdaxrom ]; then
+	if [ "$BINUTILS_RECIPE" = series ]; then
+		irix_apply_series "$src" "$BINUTILS_SERIES_FILE"
+	else
 		fetch_patches "${BINUTILS_PATCHES[@]}"
 		irix_apply_patches "$src" "${PATCH_FILES[@]}"
 	fi

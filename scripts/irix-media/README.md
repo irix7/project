@@ -16,6 +16,7 @@ image.
 | `readiso.py` | Driver: extract one file by exact EFS path. |
 | `swscan.py` | Driver: list the installed paths carried by every `dist/*.sw` archive in an image, without decompressing. |
 | `extract-sw.py` | Driver: job-driven extraction of `inst` records, decompressing and checksumming each payload (see `jobs.example.json`). |
+| `dumpz.py` | Driver: dump one installed path from a dist archive without Python-side decompression — streams the compressed record to a `.Z` file, decodes it with the system `gzip -dc`, and truncates ELF output to its section-table extent. Preferred for large unstripped libraries. |
 
 The drivers import their sibling modules directly from this directory, so
 they run as plain scripts from anywhere:
@@ -32,6 +33,11 @@ python3 scripts/irix-media/swscan.py "/path/to/IRIX 6.5 Foundation 1.iso"
 
 # Job-driven extraction (decompresses and verifies each record):
 python3 scripts/irix-media/extract-sw.py jobs.json /path/to/outroot
+
+# One unstripped debug library from the Development Libraries CD:
+python3 scripts/irix-media/dumpz.py \
+  "/path/to/IRIX 6.5 Development Libraries June 1998.iso" \
+  /dist/dmedia_dev.sw usr/lib/debug/libdmedia.so /tmp/libdmedia.so
 ```
 
 A job for `extract-sw.py` is `[image, sw_path, record_path, cmpsize, size,
@@ -65,6 +71,29 @@ under the output root mirroring each record path.
 - `lzw.unlzw()` decodes LSB-first as ncompress writes it. The plain decoder
   diverges on some dev-CD streams (a known limit); `extract-sw.py` raises
   instead of hanging, and the system `gzip -dc` decodes those streams.
+
+## Media findings
+
+Where the unstripped (debug) IRIX binaries live, established by scanning the
+project's CD images with this tooling:
+
+- The discs are all **EFS-only** (no ISO9660 layer), so `listiso.py` sees the
+  whole tree. No CD exposes a `/debug` directory at the filesystem level.
+- The **IRIX 6.5 Development Libraries (June 1998)** CD ships debug variants
+  inside its dist archives (`/dist/*_dev.sw`): `usr/lib{,32,64}/debug/*` holds
+  unstripped Motif (`libXm`, `libSgm`, `libMrm`, `libUil`), ViewKit, dmedia,
+  image-codec and related `.so`/`.a` files, and `usr/lib{,64}/abi/libc.so`
+  keeps its `.symtab`. `gl_dev.sw` is present but carries no debug libGLcore.
+- Foundation 1/2, Development Foundation 1.3 and the 6.5.7 overlays contain no
+  debug trees.
+- Validation (via the `irix7/ghidra` fork): `usr/lib/debug/libdmedia.so`
+  carries a full `.mdebug` section with `stParam` records — the fork recovered
+  764/764 function names and 733 parameterised signatures; `usr/lib/abi/libc.so`
+  recovered 1,310/1,310 names and 592 parameterised signatures, matching the C
+  standard (`memmove(void *__dest, void *__src, size_t __n)`,
+  `printf(char *__format, ...)`, `exit(int __status)`).
+- Large LZW streams: use `dumpz.py` (bounded chunked dump + system `gzip -dc`),
+  not the pure-Python decoder, which is slow and can diverge.
 
 ## Licence and provenance
 

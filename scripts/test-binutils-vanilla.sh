@@ -45,6 +45,8 @@
 #   --write-specs FILE      keep the generated specs file at FILE, so the
 #                           guest smoke can select a separate binutils
 #                           prefix with --cflags "-specs=FILE -lm"
+#   --check-irix-crt1-alignment
+#                           require the linked .init and __istart alignment
 #   -h, --help              show this help
 #
 set -euo pipefail
@@ -58,6 +60,7 @@ BINUTILS_PREFIX=
 BINUTILS_VERSION=2.47
 SYSROOT=
 SPECS_OUT=
+CHECK_IRIX_CRT1_ALIGNMENT=0
 
 usage() {
 	cat <<'EOF'
@@ -76,6 +79,8 @@ for o32 and n32: identity, emission (ELF headers and relocations) and link
                           $CC -print-sysroot)
   --write-specs FILE      keep the generated specs file at FILE for the
                           guest smoke (--cflags "-specs=FILE -lm")
+  --check-irix-crt1-alignment
+                          require the linked .init and __istart alignment
   -h, --help              show this help
 EOF
 }
@@ -100,6 +105,7 @@ while [ $# -gt 0 ]; do
 		--binutils-version) BINUTILS_VERSION=$2; shift 2 ;;
 		--sysroot) SYSROOT=$2; shift 2 ;;
 		--write-specs) SPECS_OUT=$2; shift 2 ;;
+		--check-irix-crt1-alignment) CHECK_IRIX_CRT1_ALIGNMENT=1; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "unknown option: $1 (try --help)" ;;
 	esac
@@ -299,6 +305,26 @@ link_probe() {
 	"$READELF" -d "$bin" | grep -q 'Shared library: \[libm\.so\]' ||
 		die "$abi: binary does not depend on libm.so"
 	pass "$abi: candidate ld links the IRIX startfiles and sysroot libs (interpreter $interp)"
+	if (( CHECK_IRIX_CRT1_ALIGNMENT )); then
+		local init_line init_addr init_align istart
+		init_line=$("$READELF" -SW "$bin" | awk '$3 == ".init" { print; exit }')
+		[ -n "$init_line" ] || die "$abi: linked image has no .init section"
+		init_addr=$(awk '{ print $5 }' <<<"$init_line")
+		init_align=$(awk '{ print $NF }' <<<"$init_line")
+		istart=$("$READELF" -sW "$bin" | awk '$NF == "__istart" { print $2; exit }')
+		[ -n "$istart" ] || die "$abi: linked image has no __istart symbol"
+		case "$abi" in
+			o32) (( init_align >= 16 )) || die "o32: .init alignment is $init_align, expected at least 16" ;;
+			n32) (( init_align >= 4 )) || die "n32: .init alignment is $init_align, expected at least 4" ;;
+		esac
+		(( (init_align & (init_align - 1)) == 0 )) ||
+			die "$abi: .init alignment $init_align is not a power of two"
+		(( (16#$init_addr % init_align) == 0 )) ||
+			die "$abi: .init address 0x$init_addr is not aligned to $init_align"
+		(( (16#$istart % 4) == 0 )) ||
+			die "$abi: __istart 0x$istart is not word-aligned"
+		pass "$abi: .init alignment $init_align at 0x$init_addr; __istart 0x$istart is word-aligned"
+	fi
 }
 
 link_probe o32 32 /usr/lib/libc.so.1

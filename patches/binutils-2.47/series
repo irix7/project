@@ -10,7 +10,7 @@
 # Apply with `patch -p1` from the binutils-2.47 source root, in order.
 # Provenance: SGUG-RSE binutils2_23.sgifixes.patch, onre/binutils-gdb
 # binutils-2_44-irix (4b55be5884a3) and upstream commits 9e8082845f85,
-# e6aea42dfa and a5499fa464.
+# e6aea42dfa, a5499fa464, 9e6619e285 and 1f9b1a8435.
 #
 # Not carried; removed from the tree, kept in git history:
 #   0002-irix-gp-global-absolute.patch: guest cand-b (0002 alone) failed
@@ -21,3 +21,4 @@
 0001-irix-got-local-restoration.patch
 0003-irix-rld-map-section.patch
 0005-irix-no-rld-map-rel.patch
+0006-irix-crt1-section-alignment.patch

@@ -64,11 +64,13 @@ crash: the working 2.20.1 o32 table's header has `num=0` and an all-zero
 body (the 0x954 bytes are over-allocation), and cand-g carries the same
 shape yet still fails o32. Patch 0004's restored count is therefore
 inert for the loader, 0004 is dropped from the series, and the native
-MIPSpro `num=2` case is a MIPSpro-only path. The dynamic-section lead
-now stands: see "`DT_MIPS_RLD_MAP_REL` was added after IRIX (2015)"
-below.
+MIPSpro `num=2` case is a MIPSpro-only path. The later cand-h core decode
+identified the actual fault as a misaligned `__istart`; see "Malformed
+o32 crt1 alignment" below.
 
-The current round is **cand-h**: 0001 + 0003 + 0005, no 0002 or 0004.
+Cand-h (0001 + 0003 + 0005) still fails o32 with SIGBUS 138 and passes
+n32. It is retained as the pre-alignment comparison point, not as a
+candidate for guest testing.
 
 The same o32 hello's readelf signature:
 
@@ -136,7 +138,8 @@ all, while the 2.20.1 and SGUG 2.23.2 baselines carry it. The
 (`3d4d4302b9`, "$(bfd_get_linker_section): New function...") and is not
 the cause: the section flags already included `SEC_LINKER_CREATED` in
 2.20.1, where the orphan script still placed it. `DT_MIPS_RLD_MAP_REL`
-(`a5499fa464`, 2015) is unrelated and is kept.
+(`a5499fa464`, 2015) is a separate compatibility issue, suppressed for
+SGI output by patch 0005.
 
 Patch 0003 restores the `ict_irix5` arm for `bfd_link_executable` output
 and keeps the modern `!use_rld_obj_head` rule for every other MIPS
@@ -159,6 +162,43 @@ IRIX 6.5.7 o32 loader never knew. Patch 0005 gates the tag on
 `!SGI_COMPAT (info->output_bfd)`, so SGI output keeps only
 `DT_MIPS_RLD_MAP` with the 2.20.1 dynamic layout; generic MIPS/Linux is
 unchanged.
+
+### Malformed o32 crt1 alignment
+
+The guest core resolves the remaining o32 SIGBUS precisely: CAUSE
+ExcCode 4, EPC = BADVADDR = `0x0040051e`; GOT slot 18 contains that same
+address, the value of `__istart`. The captured o32 `crt1.o` defines
+`__istart` at offset `0xc` into `.init`, whose ELF `sh_addralign` is 27
+(`0x1b`), a malformed non-power-of-two value. cand-h places `.init` at
+`0x400512` with alignment 1, leaving `__istart=0x40051e` (2 mod 4), so
+the loader's `jalr` raises the address error. The working 2.20.1 output
+places `.init` at `0x400560`, alignment 16, and `__istart=0x40056c`.
+
+Two upstream changes explain the history:
+
+- `9e6619e285873fe1cb002da4bb7749be40a5627c` (Alan Modra, 2011-04-20)
+  changed `bfd_log2` from rounding down to rounding up. On the 2.20.1
+  path, raw 27 gave alignment power 4 (16); after this change, 27 gives
+  power 5 (32). The SGUG 2.23.2 reference contains the round-up change.
+- `1f9b1a84350d3755ce8620900a35c3d1997535e6` (Alan Modra, 2022-02-15,
+  "What to do when sh_addralign isn't a power of two") changed
+  `_bfd_elf_make_section_from_shdr` to use
+  `bfd_log2 (sh_addralign & -sh_addralign)`. This safely chooses the
+  greatest power-of-two divisor for invalid ELF values, but turns 27 into
+  alignment power 0 (1) in 2.47. This is the change that makes the input
+  code under-aligned; 2.20.1's 16 and 2.23.2's 32 were both safe.
+
+An instrumented cand-j link confirms the BFD values on the actual input:
+for `crt1.o` `.init`, raw `sh_addralign=27`, generic `alignment_power=0`,
+then the SGI compatibility normaliser sets `alignment_power=4`. The
+resulting output has `.init` at `0x400560`, alignment 16, and
+`__istart=0x40056c`. The MIPS `section_from_shdr` backend callback is
+bypassed for ordinary `SHT_PROGBITS`; the correction therefore runs in
+the o32 and n32 `object_p` callbacks, after all sections have been
+created, and only under `SGI_COMPAT`. It clamps malformed non-power-of-two
+alignments to the largest power of two not exceeding the input. Valid
+alignments and generic MIPS/Linux inputs are unchanged. Patch 0006 records
+this fix and both upstream commits' provenance.
 
 ### Compact relocation accounting stopped (2020)
 
@@ -239,14 +279,16 @@ script yet) applies with `patch -p1` from the binutils-2.47 source root:
 | `0001-irix-got-local-restoration.patch` | SGUG's forced-local GOT predicate plus the `check_forced` relocation-time half |
 | `0003-irix-rld-map-section.patch` | restore the `ict_irix5` `.rld_map` creation arm removed by `e6aea42dfa` |
 | `0005-irix-no-rld-map-rel.patch` | suppress `DT_MIPS_RLD_MAP_REL` for `SGI_COMPAT` output (`a5499fa464`) |
+| `0006-irix-crt1-section-alignment.patch` | restore the 2.20.1 floor normalisation for malformed SGI input alignment; upstream history `9e6619e285` and `1f9b1a8435` |
 
 Dropped after guest evidence and removed from the tree (git history keeps
 them): `0002` (`_gp` GLOBAL ABS; cand-b failed n32 and it did not fix
 o32) and `0004` (compact count; cand-g still failed o32 and the table is
 inert with `num = 0`). Every prefix was built in scratch with a generated
 specs file, the spec routing the driver's `as`/`ld` to the candidate
-prefix as described in [toolchain.md](toolchain.md). The current round is
-**cand-h** (`0001+0003+0005`); a..g remain for comparison.
+prefix as described in [toolchain.md](toolchain.md). The current guest-smoke
+round is **cand-j** (`0003+0006`) followed by **cand-k**
+(`0001+0003+0005+0006`); cand-a..h remain for comparison.
 
 Signatures of `oracle/hello.c` (`dyn` is the `.dynamic` entry count,
 `RLD_MAP/REL` the presence of `DT_MIPS_RLD_MAP`/`DT_MIPS_RLD_MAP_REL`,
@@ -266,8 +308,32 @@ cand-h returns the `.dynamic` layout to the baseline (`DT_MIPS_RLD_MAP`
 only, 20 entries) on both ABIs. The remaining o32 delta is the two
 missing LOCAL HIDDEN `.dynsym` entries, which shifts SYMTABNO 24 to 22
 and GOTSYM 0xb to 0x9; the probe above shows 2.47 never gives those
-symbols an index. `_gp` is left LOCAL in `.got` (0002 not carried). Every
-candidate built so far (a..h) passes the guest-free regression.
+symbols an index. `_gp` is left LOCAL in `.got` (0002 not carried). This
+table is historical; the current candidates' complete start/alignment and
+dynamic signatures are below.
+
+The guest-free candidate signatures are:
+
+| candidate | ABI | `.init` address / alignment | `__istart` | dyn | `MIPS_LOCAL_GOTNO/GOTSYM/SYMTABNO/HIPAGENO` | `RLD_MAP/REL` | `.rld_map` section | `.compact_rel` |
+| --- | --- | --- | ---: | ---: | --- | --- | --- | --- |
+| cand-j (`0003+0006`) | o32 | `0x00400560` / 16 | `0x0040056c` | 21 | `13 / 0xd / 22 / 11` | yes/yes | present at `0x10000010` | 0x18; id1=1, num=0, id2=2, offset=0x1244, reserved=0 |
+| cand-j (`0003+0006`) | n32 | `0x10000574` / 4 | `0x10000580` | 21 | `16 / 0xd / 22 / n/a` | yes/yes | absent | absent |
+| cand-k (`0001+0003+0005+0006`) | o32 | `0x00400550` / 16 | `0x0040055c` | 20 | `9 / 0x9 / 22 / 7` | yes/no | present at `0x10000010` | 0x18; id1=1, num=0, id2=2, offset=0x1244, reserved=0 |
+| cand-k (`0001+0003+0005+0006`) | n32 | `0x1000056c` / 4 | `0x10000578` | 20 | `12 / 0x9 / 22 / n/a` | yes/no | absent | absent |
+
+`DT_MIPS_RLD_MAP` is present in all four images (o32 slot `0x10000068`,
+n32 slot `0x10010be0`). The n32 images have no `.rld_map` marker section;
+the o32 marker is zero-sized at `0x10000010`. Both o32 compact headers are
+24 bytes with `num=0` and six words `1, 0, 2, 0x1244, 0, 0`; neither n32
+image has `.compact_rel`. cand-j intentionally retains
+`DT_MIPS_RLD_MAP_REL`; cand-k suppresses it with patch 0005.
+
+Candidate prefixes and specs for guest smoke:
+
+| candidate | prefix | specs |
+| --- | --- | --- |
+| cand-j | `.scratch/binutils-build/prefix-cand-j` | `.scratch/binutils-build/diag/cand-j.specs` |
+| cand-k | `.scratch/binutils-build/prefix-cand-k` | `.scratch/binutils-build/diag/cand-k.specs` |
 
 ## Host verification
 
@@ -275,9 +341,11 @@ candidate built so far (a..h) passes the guest-free regression.
 regression. It checks identity, o32/n32 emission (ELF headers and
 relocations) and the o32/n32 dynamic link (IRIX startfiles, interpreter,
 libc/libm) against a candidate binutils prefix through a generated specs
-file. Every candidate built so far (a..h) passes it with
-`--binutils-version 2.47`, and the script still passes against 2.20.1 with
-`--binutils-version 2.20.1`.
+file. The updated `--check-irix-crt1-alignment` option additionally requires
+o32 `.init` alignment of at least 16, n32 alignment of at least 4, aligned
+section addresses, and 4-byte-aligned `__istart`. Both cand-j and cand-k
+pass all host checks with `--binutils-version 2.47`; guest validation is
+pending. The script also retains its vanilla and 2.20.1 modes.
 
 The prefixes and specs above are scratch artefacts (`.scratch/` is
 ignored); the in-repo series is reproducible with the same `configure`
@@ -285,16 +353,22 @@ line as the vanilla recipe plus `patch -p1` in series order.
 
 ## Guest smoke for the integrator
 
-The current round is **cand-h** (0001+0003+0005), with no `_gp` or
-compact hunks; cand-a..g are retained for regression comparison. Each run
-uses the existing 16.2 cross and the candidate's specs file:
+Run cand-j first, then cand-k, for o32 and n32. These are guest commands
+for the integrator; no guest command has been run in this work session.
+Each run uses the existing 16.2 cross and candidate specs:
 
 ```sh
-scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-h.specs -lm" \
+scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-j.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
-scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix --abi n32 \
-	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-h.specs -lm" \
+scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix --abi n32 \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-j.specs -lm" \
+	oracle/hello.c scripts/smoke/hello.expected
+scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-k.specs -lm" \
+	oracle/hello.c scripts/smoke/hello.expected
+scripts/smoke.sh --prefix .scratch/toolchain-16.2/prefix --abi n32 \
+	--cflags "-specs=<worktree>/.scratch/binutils-build/diag/cand-k.specs -lm" \
 	oracle/hello.c scripts/smoke/hello.expected
 ```
 
@@ -311,7 +385,8 @@ dropped.
 hunks' no-patch verdicts) as a maintainer push step; this branch does not
 push. Provenance to carry across: the pins above, SGUG-RSE
 `binutils2_23.sgifixes.patch`, onre `4b55be5884a3`, the carried upstream
-commits `9e8082845f85`, `e6aea42dfa` and `a5499fa464`, the dropped-patch
+commits `9e8082845f85`, `e6aea42dfa`, `a5499fa464`, `9e6619e285` and
+`1f9b1a8435`, the dropped-patch
 archaeology (`3be08ea4728b`, `c4b126b87a`, `e17b0c351f`), and this
 document as the decision record. No SGI or licence-restricted material is
 involved; binutils is GPL.

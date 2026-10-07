@@ -46,14 +46,23 @@ Build the item with the tree's own tools inside the guest: MIPSpro `cc`,
 `smake`, the same pattern as `scripts/rig/hinv-reference.sh` and
 `scripts/rig/oracle.sh` (see `docs/reference-hinv.md`, `docs/oracle.md`).
 
+**Locate the source first.** The board's `src` field reports availability in
+the *full* IRIX tree (`irix7/irix6`) and the dist media, **not** what a local
+checkout happens to contain — a `src: full` item may still have no source in
+a partial checkout. The first act of `IRIX cc` is to find the item's sources
+and makefiles under `irix/` (e.g. `irix/cmd/<product>`, `irix/lib/...`,
+`irix/kern/...`) in the full tree. If they are genuinely absent, recover them
+into `irix7/irix6` from the media, or set `src: missing` and open a
+source-restoration issue rather than building from nothing.
+
 The defining rule of this stage: **when the source tree needs a fix — a
 broken makefile, a missing file, a release erratum — the fix goes back into
 the private tree repo `irix7/irix6`, not into a build-side workaround.** The
 native pass exists to make the tree itself buildable, and each fix lands
 once, centrally, instead of scattering per-component shims through the build
-scripts. `docs/inventory.md`'s "Source-restoration fixes" are the model:
-the smake `$(VAR)SUFFIX=` idiom across 248 Makefiles, the sash `-coff` → ELF
-path, the libsk/libsc/libsl archive rule, and the header farm.
+scripts. The model fixes so far: the smake `$(VAR)SUFFIX=` idiom across 248
+Makefiles, the sash `-coff` → ELF path, the libsk/libsc/libsl archive rule,
+and the header farm.
 
 - `IRIX cc` = `done` when the item builds natively with IRIX tools.
 - `IRIX run` = `done` when the native binary runs in the guest and its

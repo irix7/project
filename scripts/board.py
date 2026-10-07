@@ -358,7 +358,7 @@ def cmd_status(args, items):
     print(f"  items: {len(items)}  src full={src_counts.get('full', 0)} "
           f"stub={src_counts.get('stub', 0)} none={src_counts.get('none', 0)} "
           f"missing={src_counts.get('missing', 0)}")
-    print(f"  deco     remaining: {deco_pending}")
+    print(f"  deco (stub/none) remaining: {deco_pending}")
     for f in ("IRIX cc", "IRIX run", "GCC cc", "GCC run"):
         print(f"  {f:<9} remaining: {pending[f]}")
     return 0

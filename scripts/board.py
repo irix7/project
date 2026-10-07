@@ -20,12 +20,14 @@ Field vocabulary (see docs/agents/rebuild-worker.md):
     Rust     done | in progress | not started | blocked | n/a   (stage two)
 
 Commands:
-    frontier [--lane full|stub|none]   list unclaimed items and their next action
-    show TITLE                         print one item's full field state
-    claim TITLE                        Status -> In Progress, next field -> in progress
-    set TITLE FIELD VALUE              set any single-select field
-    done TITLE                         Status -> Done
-    release TITLE                      abandon: Status -> Todo, in-progress -> not started
+    frontier [--lane full|stub|none|missing]  list unclaimed items and their next action
+    status                            board-wide summary of remaining work
+    show TITLE                        print one item's full field state
+    claim TITLE                       Status -> In Progress, next field -> in progress
+    advance TITLE [--field FIELD] [--value V]  finish the in-progress step, hand back
+    set TITLE FIELD VALUE             set any single-select field
+    done TITLE                        Status -> Done
+    release TITLE                     abandon: Status -> Todo, in-progress -> not started
 
 Global flags: --owner (default irix7), --project (default 1), --dry-run
 (print the writes without executing them).
@@ -325,13 +327,15 @@ def cmd_done(args, items, owner, number, proj_id, fields):
 
 def cmd_advance(args, items, owner, number, proj_id, fields):
     item = _match(items, args.title)
-    target = None
-    for field in ["deco"] + LIFECYCLE_FIELDS + ["Rust"]:
-        if _value(item, field) == "in progress":
-            target = field
-            break
+    target = args.field
     if target is None:
-        sys.exit(f"board: {item['title']} has no in-progress field to advance")
+        for field in ["deco"] + LIFECYCLE_FIELDS + ["Rust"]:
+            if _value(item, field) == "in progress":
+                target = field
+                break
+    if target is None:
+        sys.exit(f"board: {item['title']} has no in-progress field to advance "
+                 f"(pass --field to name one explicitly)")
     value = args.value or ("n/a" if target == "Rust" else "done")
     _edit(owner, number, proj_id, fields, item["id"], target, value, args.dry_run)
     _edit(owner, number, proj_id, fields, item["id"], "Status", "Todo", args.dry_run)
@@ -401,6 +405,7 @@ def main(argv=None):
     p = sub.add_parser("advance", help="finish the in-progress step and hand back",
                        parents=[common])
     p.add_argument("title")
+    p.add_argument("--field", help="field to advance (default: the in-progress one)")
     p.add_argument("--value", help="terminal value (default done, or n/a for Rust)")
 
     p = sub.add_parser("set", help="set one single-select field", parents=[common])

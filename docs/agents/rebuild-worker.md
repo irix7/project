@@ -12,9 +12,11 @@ The board is the only source of truth for rebuild state:
 
 - Project: https://github.com/orgs/irix7/projects/1 (`irix7/projects/1`,
   node id `PVT_kwDOFBsSF84BmAM2`).
-- ~440 buildable draft items (377 `full`, 55 `stub`, 10 `none` at time of
-  writing) — the full IRIX 6.5.7m product set, plus the binary-only kernel
-  and userland modules that need reconstruction.
+- ~430 buildable draft items (377 `full`, 40 `stub`, 10 `none`; `missing` is
+  tracked as `src: missing` only when a product's source cannot be found) —
+  the IRIX 6.5.7m product set plus the binary-only kernel and userland modules
+  that need reconstruction. Ask `scripts/board.py status` for live counts
+  rather than trusting this file.
 - Fields: `src` / `deco` / `IRIX cc` / `IRIX run` / `GCC cc` / `GCC run` /
   `Rust`, plus the shared `Status` (Todo / In Progress / Done).
 - A later agent reads the board as ground truth. Never leave it stale: every
@@ -49,11 +51,19 @@ Build the item with the tree's own tools inside the guest: MIPSpro `cc`,
 **Locate the source first.** The board's `src` field reports availability in
 the *full* IRIX tree (`irix7/irix6`) and the dist media, **not** what a local
 checkout happens to contain — a `src: full` item may still have no source in
-a partial checkout. The first act of `IRIX cc` is to find the item's sources
-and makefiles under `irix/` (e.g. `irix/cmd/<product>`, `irix/lib/...`,
-`irix/kern/...`) in the full tree. If they are genuinely absent, recover them
-into `irix7/irix6` from the media, or set `src: missing` and open a
-source-restoration issue rather than building from nothing.
+a partial checkout. The tree has three source roots, and the item's title
+tells you which one to look in:
+
+- `irix/` — kernel, system libraries, core commands: `irix/kern/...`,
+  `irix/lib/...`, `irix/cmd/...`.
+- `eoe/` — the userland product set (the `.sw.*` items): `eoe/cmd/<name>`,
+  `eoe/lib/...`, `eoe/include/...`. `eoe.sw.base` is here, not under `irix/`.
+- `stand/` — the standalone boot and PROM programs.
+
+The first act of `IRIX cc` is to find the item's sources and makefiles under
+the right root. If they are genuinely absent, recover them into `irix7/irix6`
+from the media, or set `src: missing` and open a source-restoration issue
+rather than building from nothing.
 
 The defining rule of this stage: **when the source tree needs a fix — a
 broken makefile, a missing file, a release erratum — the fix goes back into

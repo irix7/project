@@ -8,9 +8,9 @@ against the recorded oracle output (ADR-0006's deferred static proof).
 
 Source selection comes from the tree's own smake leaf makefiles
 (scripts/runtime/smake.py), and the MIPSpro-only constructs those sources use
-are translated in a stream (scripts/runtime/compat.py); the tree itself is
-never edited (ADR-0005). The static link uses the tree's own csu startfiles,
-so it needs no SGI runtime at all.
+are translated in a stream (scripts/runtime/compat.py) as an interim measure;
+the modernised tree branch is where such changes land (ADR-0020). The static
+link uses the tree's own csu startfiles, so it needs no SGI runtime at all.
 
 The driver is a host build until the final phase; the guest transaction runs
 under the rig's shared guest lock, like smoke.sh and hinv-reference.sh, and

@@ -2,5 +2,7 @@
 result
 result-*
 .direnv/
-.scratch/
+.scratch
 __pycache__/
+a.out
+

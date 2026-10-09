@@ -224,12 +224,12 @@ fi
 
 # ── Stage 3: fork GCC ────────────────────────────────────────────────────
 stage "Fork GCC"
-say "Forking gcc-mirror/gcc into $GH_ORG as a fork named gcc."
+say "Forking rust-lang/gcc into $GH_ORG as a fork named gcc."
 if gh repo view "$GH_ORG/gcc" >/dev/null 2>&1; then
   note "already exists: $GH_ORG/gcc"
 else
-  gh repo fork gcc-mirror/gcc --org "$GH_ORG" --fork-name gcc --clone=false \
-    || warn "fork failed; create it by hand at https://github.com/gcc-mirror/gcc/fork"
+  gh repo fork rust-lang/gcc --org "$GH_ORG" --fork-name gcc --clone=false \
+    || warn "fork failed; create it by hand at https://github.com/rust-lang/gcc/fork"
 fi
 GCC_FORK="$GH_ORG/gcc"
 write_env GCC_FORK "$GCC_FORK"

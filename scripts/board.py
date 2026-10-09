@@ -17,10 +17,11 @@ Field vocabulary (see docs/agents/rebuild-worker.md):
     IRIX run done | in progress | not started | blocked | n/a   (native run)
     GCC cc   done | in progress | not started | blocked | n/a   (cross build)
     GCC run  done | in progress | not started | blocked | n/a   (cross run)
-    Rust     done | in progress | not started | blocked | n/a   (stage two)
+    Rust     done | in progress | not started | blocked | n/a   (IRIX 7, ADR-0020)
 
 Commands:
     frontier [--lane full|stub|none|missing]  list unclaimed items and their next action
+    next [--lane full|stub|none|missing]  allocate and claim the next claimable item
     status                            board-wide summary of remaining work
     show TITLE                        print one item's full field state
     claim TITLE                       Status -> In Progress, next field -> in progress
@@ -35,8 +36,10 @@ Global flags: --owner (default irix7), --project (default 1), --dry-run
 
 import argparse
 import json
+import random
 import subprocess
 import sys
+import time
 from collections import Counter
 
 OWNER_DEFAULT = "irix7"
@@ -64,13 +67,23 @@ ALIAS_TO_FIELD = READ_ALIASES
 FIELD_TO_ALIAS = {v: k for k, v in READ_ALIASES.items()}
 
 
-def gh(args, check=True):
-    proc = subprocess.run(
-        ["gh"] + args, capture_output=True, text=True
-    )
-    if check and proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
-        sys.exit(proc.returncode or 1)
+def gh(args, check=True, attempts=5):
+    delay = 2
+    for attempt in range(1, attempts + 1):
+        proc = subprocess.run(["gh"] + args, capture_output=True, text=True)
+        if proc.returncode == 0 or not check:
+            return proc
+        combined = ((proc.stderr or "") + (proc.stdout or "")).lower()
+        transient = (
+            "rate limit" in combined
+            or "secondary rate" in combined
+            or "something went wrong" in combined
+        )
+        if not transient or attempt == attempts:
+            sys.stderr.write(proc.stderr)
+            sys.exit(proc.returncode or 1)
+        time.sleep(delay)
+        delay = min(delay * 2, 30)
     return proc
 
 
@@ -220,6 +233,82 @@ def next_action(item):
     return None, "all lanes complete"
 
 
+def in_progress_field(item):
+    """The field currently marked `in progress`, or None."""
+    for field in ["deco"] + ACTION_FIELDS:
+        if _value(item, field) == "in progress":
+            return field
+    return None
+
+
+# The per-field briefing the board hands the worker. This is the loop's context
+# and is improved centrally here, so every worker gets the latest version at the
+# moment it needs it rather than from a stale spawn prompt.
+STEP_GUIDE = {
+    "deco": [
+        "Reconstruct lane: decompile the shipped binary to C.",
+        "Land the C under decompiled/ in irix7/irix6; keep evidence in the instance work/ dir.",
+        "Then the recompile lane runs on the recovered C.",
+    ],
+    "IRIX cc": [
+        "Stock rebuild: build the command natively with IRIX's own tools (MIPSpro cc/smake).",
+        "Locate the source under the tree roots irix/ (kernel, libs, core cmds), eoe/ (userland), stand/ (boot/PROM).",
+        "scripts/rig/task-rig.sh start <item>   # private rig; the guest starts PAUSED",
+        "Boot and log in before reading the serial log: iris-ci start, or scripts/rig/oracle-driver.py ensure-shell.",
+        "Guest shell is csh: use >& / >>&, $status (not $?), and one simple command per iris-ci run.",
+        "Evidence (objects, binaries, build logs) -> the instance work/ dir.",
+    ],
+    "IRIX run": [
+        "Run the rebuilt binary in the guest and capture stdout as the oracle.",
+        "Diff it against the shipped binary; save both outputs in the instance work/ dir.",
+    ],
+    "GCC cc": [
+        "Modernised tree: build the same source with the mips-sgi-irix6.5 cross.",
+        "A clean build with no tree change is a valid outcome; if GCC-enabling change is needed",
+        "  it lands on a branch of irix7/irix6 (ADR-0020), never build-side translation.",
+        "Use the native binary/objects and the smake logs from work/ as the reference.",
+    ],
+    "GCC run": [
+        "Run the cross-built binary in the guest; diff stdout against the oracle byte-for-byte (scripts/smoke.sh).",
+        "Prove the ELF shape with the cross readelf.",
+    ],
+    "Rust": [
+        "IRIX 7 stage: not part of the stock rebuild or the modernised tree. Mark n/a for now.",
+    ],
+}
+
+REMINDERS = [
+    "Board: advance completes one field and flips the item to Todo. For the next field use",
+    '  scripts/board.py advance <item> --field "<FIELD>" --value done   (or claim, then advance).',
+    "Set a field done only with evidence; a field you could not attempt is blocked or n/a, never done.",
+    "Report friction: doc/script gaps, ambiguity and busywork, with exact commands, in your final message.",
+]
+
+
+def print_guide(field):
+    """Print the briefing for FIELD (the stage the worker is about to do)."""
+    if not field:
+        return
+    guide = STEP_GUIDE.get(field)
+    if not guide:
+        return
+    print(f"next: {field}")
+    for line in guide:
+        print(f"  {line}")
+    print("  ---")
+    for line in REMINDERS:
+        print(f"  {line}")
+
+
+def _simulate_advance(item, field, value):
+    """A copy of ITEM with FIELD set to VALUE and Status flipped to Todo."""
+    clone = dict(item)
+    clone["fields"] = dict(item["fields"])
+    clone["fields"][field] = value
+    clone["fields"]["Status"] = "Todo"
+    return clone
+
+
 def _match(items, title):
     """Resolve TITLE to exactly one item by exact or unique substring match."""
     exact = [i for i in items if i["title"] == title]
@@ -294,6 +383,12 @@ def cmd_show(args, items):
     field, reason = next_action(item)
     if field:
         print(f"  next -> set {field!r} to {reason!r}")
+        print_guide(field)
+        return 0
+    current = in_progress_field(item)
+    if current:
+        print(f"  in progress -> {current}")
+        print_guide(current)
     else:
         print(f"  next -> {reason}")
     return 0
@@ -308,6 +403,38 @@ def cmd_claim(args, items, owner, number, proj_id, fields):
     if field in fields:
         _edit(owner, number, proj_id, fields, item["id"], field, value, args.dry_run)
     print(f"claimed {item['title']}: Status -> In Progress, {field} -> {value}")
+    print_guide(field)
+    return 0
+
+
+def cmd_next(args, items, owner, number, proj_id, fields):
+    """Allocate a claimable item at random and claim it, in one step.
+
+    Same selection as `frontier` (optionally one lane), but picks a candidate
+    itself so the caller never has to read the list back. Random choice keeps
+    two agents starting at once from both grabbing the same first item. Claims
+    via the same Status -> In Progress transition as `claim`.
+    """
+    lane = args.lane
+    candidates = []
+    for item in sorted(items, key=lambda i: (i["title"] or "")):
+        if not item["title"]:
+            continue
+        if lane and _value(item, "src") != lane:
+            continue
+        field, value = next_action(item)
+        if field is None:
+            continue
+        candidates.append((item, field, value))
+    if not candidates:
+        sys.exit("board: no claimable items")
+    item, field, value = random.choice(candidates)
+    _edit(owner, number, proj_id, fields, item["id"], "Status", "In Progress", args.dry_run)
+    if field in fields:
+        _edit(owner, number, proj_id, fields, item["id"], field, value, args.dry_run)
+    print(f"allocated {item['title']}: Status -> In Progress, {field} -> {value}")
+    print(item["id"])
+    print_guide(field)
     return 0
 
 
@@ -340,6 +467,8 @@ def cmd_advance(args, items, owner, number, proj_id, fields):
     _edit(owner, number, proj_id, fields, item["id"], target, value, args.dry_run)
     _edit(owner, number, proj_id, fields, item["id"], "Status", "Todo", args.dry_run)
     print(f"advanced {item['title']}: {target} -> {value}, Status -> Todo")
+    next_field, _ = next_action(_simulate_advance(item, target, value))
+    print_guide(next_field)
     return 0
 
 
@@ -402,6 +531,10 @@ def main(argv=None):
                        parents=[common])
     p.add_argument("title")
 
+    p = sub.add_parser("next", help="allocate and claim the next claimable item",
+                       parents=[common])
+    p.add_argument("--lane", choices=["full", "stub", "none", "missing"])
+
     p = sub.add_parser("advance", help="finish the in-progress step and hand back",
                        parents=[common])
     p.add_argument("title")
@@ -434,6 +567,8 @@ def main(argv=None):
         return cmd_status(args, items)
     if args.command == "claim":
         return cmd_claim(args, items, args.owner, args.project, proj_id, fields)
+    if args.command == "next":
+        return cmd_next(args, items, args.owner, args.project, proj_id, fields)
     if args.command == "advance":
         return cmd_advance(args, items, args.owner, args.project, proj_id, fields)
     if args.command == "set":

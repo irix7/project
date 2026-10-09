@@ -8,8 +8,8 @@ reference from issue #7 (ADR-0005). The reference's dry-run and verbose logs
 in `$RIG_ORACLE_DIR/hinv-reference/` fix the flags that must be reproduced;
 this file records every translation and every divergence.
 
-The tree is stock: no source file is edited (ADR-0005). Everything the modern
-compiler needed is carried by flags.
+The GCC build here is carried by flags alone. Source modernisation is not
+forbidden; it belongs on the modernised tree branch (ADR-0020).
 
 ## Result
 

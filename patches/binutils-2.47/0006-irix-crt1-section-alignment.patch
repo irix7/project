@@ -46,7 +46,11 @@ and 1f9b1a84350d3755ce8620900a35c3d1997535e6.
 +    }
 --- a/bfd/elfxx-mips.c
 +++ b/bfd/elfxx-mips.c
-@@ -13123,0 +13124,29 @@
+@@ -13158,6 +13158,36 @@
+    to hide it.  It has to remain global (it will also be protected) so as to
+    be assigned a global GOT entry, which will then remain unchanged at load
+    time.  */
++
 +/* Normalise the section alignments of an SGI input file.
 +
 +   Upstream commit 1f9b1a84350d3755ce8620900a35c3d1997535e6 (Alan Modra,
@@ -76,6 +80,9 @@ and 1f9b1a84350d3755ce8620900a35c3d1997535e6.
 +  return true;
 +}
 +
+ 
+ void
+ _bfd_mips_elf_hide_symbol (struct bfd_link_info *info,
 --- a/bfd/elfxx-mips.h
 +++ b/bfd/elfxx-mips.h
 @@ -99,0 +100,2 @@

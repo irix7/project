@@ -93,7 +93,7 @@ if [ ! -d "$PREFIX" ]; then
 	skip "toolchain prefix not found: $PREFIX (build it with scripts/build-toolchain.sh, or pass --prefix)"
 	exit 0
 fi
-PREFIX=$(cd "$PREFIX" && pwd)
+PREFIX=$(cd "$PREFIX" && pwd -P)
 
 CC="${PREFIX}/bin/${TARGET}-gcc"
 READELF="${PREFIX}/bin/${TARGET}-readelf"

@@ -9,9 +9,9 @@
 # docs/reference-hinv.md): the compile line, the rld marker and the link were
 # resolved by the tree's own smake rules inside the guest. The translation
 # from every MIPSpro flag to its GCC equivalent is recorded in
-# docs/hinv-gcc.md; this script is its executable form. Prefer flag
-# translation over source changes: the tree is stock and is never edited
-# (ADR-0005).
+# docs/hinv-gcc.md; this script is its executable form. Flags carry the GCC
+# build here; source modernisation is not forbidden and belongs on the
+# modernised tree branch (ADR-0020).
 #
 # The include override is the same trick as the native build: the dev install
 # lacks the kernel-only sys/EVEREST/diagval_strs.i and diskinvent.h, so the

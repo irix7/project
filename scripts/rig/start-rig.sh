@@ -84,7 +84,16 @@ start_rig() {
 	# The child must not inherit the lock fd: if this shell died uncleanly the
 	# emulator would otherwise hold the guest lock for its whole lifetime.
 	unset RIG_GUEST_LOCK_HELD
-	setsid "$RIG_IRIS" "${args[@]}" >>"$RIG_STDOUT_LOG" 2>&1 </dev/null 9>&- &
+	if [ -n "${RIG_PROC_TITLE:-}" ]; then
+		# Per-task instances (task-rig.sh) set RIG_PROC_TITLE so `ps` names
+		# the emulator after the thing it is rebuilding. exec -a sets argv[0]
+		# without disturbing the real --config/--ci iris parses. The bash
+		# layer execs straight into iris, so $! is still the emulator's pid.
+		setsid bash -c 'exec -a "$0" "$@"' "$RIG_PROC_TITLE" "$RIG_IRIS" "${args[@]}" \
+			>>"$RIG_STDOUT_LOG" 2>&1 </dev/null 9>&- &
+	else
+		setsid "$RIG_IRIS" "${args[@]}" >>"$RIG_STDOUT_LOG" 2>&1 </dev/null 9>&- &
+	fi
 	echo $! >"$RIG_PID_FILE"
 
 	local _

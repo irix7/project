@@ -106,6 +106,13 @@ REPO_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 # shellcheck source=scripts/lib/build-identity.sh
 source "${SCRIPT_DIR}/lib/build-identity.sh"
 
+# The IRIX OS layer as a git fork of rust-lang/gcc (GCC 17 trunk); see
+# ADR-0019. `--gcc fork` (or `--gcc 17`) builds it directly: the IRIX commits
+# are already in its history, so no patch series is applied. Override the
+# checkout with --gcc-fork or GCC_FORK_DIR.
+GCC_FORK_DIR=${GCC_FORK_DIR:-${REPO_ROOT}/.scratch/rust-lang-gcc}
+GCC_FORK_VERSION=${GCC_FORK_VERSION:-17.0.0}
+
 # The proven binutils 2.47 IRIX patch series; the manifest defines apply order.
 BINUTILS_SERIES_DIR=${REPO_ROOT}/patches/binutils-2.47
 
@@ -133,7 +140,9 @@ Build the IRIX 6.5 cross toolchain (patched binutils 2.47 + GCC 16.2.0 by
 default) targeting mips-sgi-irix6.5 with big-endian o32, n32 and n64
 multilibs. Binutils 2.47 uses the in-repo IRIX series; --binutils 2.20.1
 selects the pdaxrom-patched seed fallback. The gcc-16.2 IRIX series is
-in-repo; --gcc selects the 15.3.0 or 15.2.0 pdaxrom fallback recipe.
+in-repo; --gcc selects the 15.3.0 or 15.2.0 pdaxrom fallback recipe, or
+`fork` to build the irix7/gcc 17-trunk fork directly (IRIX commits already
+in its history), adding `jit` for the libgccjit the Rust backend needs.
 
 Usage: scripts/build-toolchain.sh [options]
 
@@ -143,7 +152,11 @@ Usage: scripts/build-toolchain.sh [options]
   --jobs N         parallel make jobs (default: number of CPUs)
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
-  --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
+  --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0, 15.2.0, or 17/fork
+                   (the irix7/gcc fork: rust-lang/gcc 17 trunk + the IRIX
+                   commits + the patched libgccjit the Rust backend needs)
+  --gcc-fork DIR   build from this GCC fork checkout (implies --gcc fork;
+                   default .scratch/rust-lang-gcc)
   --binutils VER   binutils release: 2.47 (default, IRIX series) or 2.20.1
                    (pdaxrom patches, seed fallback)
   --clean          remove the work directory before building
@@ -174,6 +187,7 @@ parse_args() {
 			--sysroot) IRIX_SYSROOT=$2; shift 2 ;;
 			--languages) LANGUAGES=$2; shift 2 ;;
 			--gcc) GCC_VERSION=$2; shift 2 ;;
+			--gcc-fork) GCC_VERSION=17.0.0; GCC_FORK_DIR=$2; shift 2 ;;
 			--binutils) BINUTILS_VERSION=$2; shift 2 ;;
 			--clean) CLEAN=1; shift ;;
 			-h|--help) usage; exit 0 ;;
@@ -228,11 +242,21 @@ resolve_recipe() {
 			GCC_SHA256=$GCC_SHA256_15_2_0
 			GCC_RECIPE=pdaxrom
 			;;
+		17|17.0.0|fork)
+			GCC_VERSION=$GCC_FORK_VERSION
+			GCC_RECIPE=fork
+			[ -d "$GCC_FORK_DIR" ] ||
+				die "GCC fork checkout not found: $GCC_FORK_DIR (clone irix7/gcc, or pass --gcc-fork)"
+			;;
 		*)
-			die "unsupported GCC version: ${GCC_VERSION} (known: 16.2.0, 15.3.0, 15.2.0)"
+			die "unsupported GCC version: ${GCC_VERSION} (known: 17.0.0/fork, 16.2.0, 15.3.0, 15.2.0)"
 			;;
 	esac
-	GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
+	if [ "$GCC_RECIPE" = fork ]; then
+		GCC_TARBALL=
+	else
+		GCC_TARBALL="gcc-${GCC_VERSION}.tar.xz"
+	fi
 }
 
 prepare_work_dir() {
@@ -357,19 +381,23 @@ gcc_identity() {
 	local patches list=()
 	printf 'component=gcc\n'
 	printf 'version=%s\n' "$GCC_VERSION"
-	printf 'tarball_sha256=%s\n' "$GCC_SHA256"
 	printf 'recipe=%s\n' "$GCC_RECIPE"
 	printf 'languages=%s\n' "$LANGUAGES"
 	printf 'sysroot=%s\n' "${IRIX_SYSROOT:-<none>}"
-	printf 'patches:\n'
-	if [ "$GCC_RECIPE" = series ]; then
-		patches=$(irix_series_patches "${GCC_SERIES_DIR}/series")
-		[ -n "$patches" ] || irix_die "empty series: ${GCC_SERIES_DIR}/series"
-		mapfile -t list <<<"$patches"
-		irix_patch_identity "${list[@]}"
+	if [ "$GCC_RECIPE" = fork ]; then
+		printf 'fork_commit=%s\n' "$(git -C "$GCC_FORK_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
 	else
-		irix_pinned_patch_identity "${GCC_15X_PATCHES[@]}"
-		irix_patch_identity "${LOCAL_GCC_PATCHES[@]}"
+		printf 'tarball_sha256=%s\n' "$GCC_SHA256"
+		printf 'patches:\n'
+		if [ "$GCC_RECIPE" = series ]; then
+			patches=$(irix_series_patches "${GCC_SERIES_DIR}/series")
+			[ -n "$patches" ] || irix_die "empty series: ${GCC_SERIES_DIR}/series"
+			mapfile -t list <<<"$patches"
+			irix_patch_identity "${list[@]}"
+		else
+			irix_pinned_patch_identity "${GCC_15X_PATCHES[@]}"
+			irix_patch_identity "${LOCAL_GCC_PATCHES[@]}"
+		fi
 	fi
 	printf 'configure:\n'
 	printf '%s\n' "$@"
@@ -427,25 +455,20 @@ build_binutils() {
 
 # --------------------------------------------------------------------- gcc --
 
-build_gcc() {
-	local extra=()
-	local gmp=${GMP_PREFIX:-} mpfr=${MPFR_PREFIX:-} mpc=${MPC_PREFIX:-} isl=${ISL_PREFIX:-}
-	if [ -n "$gmp" ]; then extra+=("--with-gmp=${gmp}"); fi
-	if [ -n "$mpfr" ]; then extra+=("--with-mpfr=${mpfr}"); fi
-	if [ -n "$mpc" ]; then extra+=("--with-mpc=${mpc}"); fi
-	if [ -n "$isl" ]; then extra+=("--with-isl=${isl}"); fi
+# gcc_extra_configure_args: the target configure arguments that depend on
+# whether a captured sysroot is present, one per line for mapfile.
+#
+# With a sysroot, libatomic is built. Its configure links a target executable
+# (AC_LINK_IFELSE), so it needs the same working non-shared target link as any
+# other program. The GCC 17 fork's IRIX specs select the SGI-ld branch unless
+# IRIX_USING_GNU_LD is defined, which made every such link pass -no_unresolved
+# to binutils 2.47's GNU ld (issue #150). The fork now defines
+# IRIX_USING_GNU_LD unconditionally for IRIX (commit dba1077c5), so the probe
+# passes and libgo's 32-bit atomics have their runtime; the old
+# libpthread-proxy heuristic is gone.
+gcc_extra_configure_args() {
 	if [ -n "$IRIX_SYSROOT" ]; then
-		extra+=("--with-sysroot=${IRIX_SYSROOT}")
-		# libatomic's configure links a pthread probe against -lpthread.
-		# The captured 6.5.7m sysroot has pthread.h (so libgcc selects
-		# gthr-posix) but no libpthread.so until issue #18 extends
-		# sysroot.files, so libatomic cannot build yet. Require both the
-		# default-o32 and n32 captures (ADR-0006 names both); libatomic
-		# returns automatically once they are present.
-		if [ ! -e "${IRIX_SYSROOT}/usr/lib/libpthread.so" ] ||
-			[ ! -e "${IRIX_SYSROOT}/usr/lib32/libpthread.so" ]; then
-			extra+=("--disable-libatomic")
-		fi
+		printf '%s\n' "--with-sysroot=${IRIX_SYSROOT}"
 	else
 		# No sysroot yet (see issue #3): build libgcc in freestanding
 		# single-threaded mode so that it does not need target headers.
@@ -453,9 +476,21 @@ build_gcc() {
 		# build, which would otherwise select the posix thread model.
 		# libatomic and libquadmath link against target libc, so they
 		# cannot be built until the sysroot exists.
-		extra+=("--without-headers" "--disable-threads"
-			"--disable-libatomic" "--disable-libquadmath")
+		printf '%s\n' "--without-headers" "--disable-threads" \
+			"--disable-libatomic" "--disable-libquadmath"
 	fi
+}
+
+build_gcc() {
+	local extra=()
+	local gmp=${GMP_PREFIX:-} mpfr=${MPFR_PREFIX:-} mpc=${MPC_PREFIX:-} isl=${ISL_PREFIX:-}
+	if [ -n "$gmp" ]; then extra+=("--with-gmp=${gmp}"); fi
+	if [ -n "$mpfr" ]; then extra+=("--with-mpfr=${mpfr}"); fi
+	if [ -n "$mpc" ]; then extra+=("--with-mpc=${mpc}"); fi
+	if [ -n "$isl" ]; then extra+=("--with-isl=${isl}"); fi
+	local sysargs=()
+	mapfile -t sysargs < <(gcc_extra_configure_args)
+	extra+=("${sysargs[@]}")
 
 	local args=(
 		--prefix="$PREFIX"
@@ -475,6 +510,12 @@ build_gcc() {
 		--with-ld="${PREFIX}/bin/${TARGET}-ld"
 		"${extra[@]}"
 	)
+	# libgccjit (the Rust codegen backend, ADR-0018) must be a PIC shared
+	# library, and release checking keeps the build bearable. See the GCC
+	# libgccjit docs, "Working on the JIT library".
+	if [[ ",${LANGUAGES}," == *",jit,"* ]]; then
+		args+=("--enable-host-shared" "--enable-checking=release")
+	fi
 
 	local identity stamp
 	identity=$(gcc_identity "${args[@]}")
@@ -485,15 +526,23 @@ build_gcc() {
 	fi
 
 	note "GCC ${GCC_VERSION} (${LANGUAGES}, ${GCC_RECIPE} recipe)"
-	fetch "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/${GCC_TARBALL}" \
-		"${DOWNLOADS}/${GCC_TARBALL}" "$GCC_SHA256"
-	extract "${DOWNLOADS}/${GCC_TARBALL}" "gcc-${GCC_VERSION}"
-	local src="${SRC_DIR}/gcc-${GCC_VERSION}"
-	if [ "$GCC_RECIPE" = series ]; then
-		irix_apply_series "$src" "${GCC_SERIES_DIR}/series"
+	local src
+	if [ "$GCC_RECIPE" = fork ]; then
+		src=$(cd "$GCC_FORK_DIR" && pwd)
+		echo "    using fork checkout ${src} at $(git -C "$src" rev-parse --short HEAD 2>/dev/null || echo '?')"
+		[ -x "${src}/configure" ] ||
+			die "fork checkout has no generated configure: run 'autoconf' in ${src} (or contrib/gcc_update) first"
 	else
-		fetch_patches "${GCC_15X_PATCHES[@]}"
-		irix_apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
+		fetch "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/${GCC_TARBALL}" \
+			"${DOWNLOADS}/${GCC_TARBALL}" "$GCC_SHA256"
+		extract "${DOWNLOADS}/${GCC_TARBALL}" "gcc-${GCC_VERSION}"
+		src="${SRC_DIR}/gcc-${GCC_VERSION}"
+		if [ "$GCC_RECIPE" = series ]; then
+			irix_apply_series "$src" "${GCC_SERIES_DIR}/series"
+		else
+			fetch_patches "${GCC_15X_PATCHES[@]}"
+			irix_apply_patches "$src" "${PATCH_FILES[@]}" "${LOCAL_GCC_PATCHES[@]}"
+		fi
 	fi
 
 	# The just-built binutils must win over any host as/ld.

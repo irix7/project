@@ -1,0 +1,7 @@
+# IRIX 7 kernel is a Rust monolith, n32/MIPS III
+
+IRIX 7's kernel is a single monolithic Rust kernel compiled for n32/MIPS III, structured internally as deep crates with language-level isolation (Theseus-style cells), and it must decode both the o32 and n32 syscall conventions so existing IRIX 6.5 binaries run unchanged. Wrapping the C IRIX kernel was rejected because it still ships SGI-derived code, and a microkernel was rejected as more work and more regression risk for little gain, since Rust already provides memory safety inside a monolith.
+
+**Considered Options**: wrap the C kernel (rejected — ships SGI code, no memory-safety win, fails the clean-room requirement); microkernel (rejected — re-deriving IRIX's System V semantics across IPC boundaries adds a new class of ordering/partial-failure bugs and cost, and Rust removes the microkernel's main motivation); monolith (chosen — mirrors the reference 1:1, so ABI fidelity and the no-regressions mandate are easiest to meet, and the oracle/smoke rig already assumes one kernel holding the state).
+
+**Consequences**: the kernel is compiled n32/MIPS III — the only buildable 64-bit-register option in LLVM, since "MIPS III + o32" crashes instruction selection, so o32 forces MIPS II and is only the fallback. Isolation is at the crate/cell level, not the MMU level, so a kernel panic is fatal; that trade-off is accepted, and any service can later be promoted to a userspace process via its channel interface without changing that interface.

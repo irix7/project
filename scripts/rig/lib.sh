@@ -19,9 +19,10 @@ set -euo pipefail
 RIG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export RIG_REPO_ROOT
 
-# Upstream emulator and the commit this rig is pinned to.
-RIG_IRIS_REPO=${RIG_IRIS_REPO:-https://github.com/techomancer/iris}
-RIG_IRIS_COMMIT=${RIG_IRIS_COMMIT:-320c38aa44013336a53cbb828674702e552afdd9}
+# The project's emulator fork; carries the CI COW-overlay relocation that the
+# per-task rigs (task-rig.sh) rely on via IRIS_COW_OVERLAY_DIR.
+RIG_IRIS_REPO=${RIG_IRIS_REPO:-https://github.com/irix7/iris}
+RIG_IRIS_COMMIT=${RIG_IRIS_COMMIT:-1528d703776cb19338c548888438ee22efc3405b}
 
 # Root of the rig tree. 6.2T is available on the shared volume; the disk image
 # is sparse until the install writes to it.

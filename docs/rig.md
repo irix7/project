@@ -13,7 +13,7 @@ ticket's.
 
 | Path                    | What it is |
 |-------------------------|------------|
-| `iris/`                 | the rig's own checkout of `techomancer/iris`, pinned in `build-iris.sh` |
+| `iris/`                 | the rig's own checkout of the emulator fork `irix7/iris`, pinned in `build-iris.sh` |
 | `iris.toml`             | config: own `ci_socket`, `nvram`, serial log, 20GB disk at SCSI 1, media changer at SCSI 4 |
 | `iris.sock`             | CI control socket; never the default `/tmp/iris.sock` |
 | `disks/irix65.raw`      | the guest's boot disk, sparse until the install writes to it |
@@ -155,6 +155,57 @@ follows in issue #5.
 `iris-ci put`/`get` move files through the SCSI 2 scratch LUN (`scratch.raw`).
 The MIPSpro oracle install, reference build and sysroot capture build on them;
 see `docs/oracle.md`.
+
+## Per-task instances
+
+Parallel rebuild agents each get a private emulator through `task-rig.sh`,
+named for the board item they are rebuilding:
+
+```sh
+scripts/rig/task-rig.sh start eoe.sw.base      # bring up this task's emulator
+scripts/rig/task-rig.sh status eoe.sw.base
+scripts/rig/task-rig.sh stop  eoe.sw.base       # stop, keep the guest
+scripts/rig/task-rig.sh stop  eoe.sw.base --rm  # stop, discard the disk overlay
+scripts/rig/task-rig.sh list
+eval "$(scripts/rig/task-rig.sh env eoe.sw.base)"      # point shared scripts here
+scripts/rig/task-rig.sh run eoe.sw.base -- nix develop --command bash -c '...'
+```
+
+Only `IRIX_TASK_MAX` instances (default 2) may run at once; each emulator pins a
+core, so `start` refuses past the cap until one is stopped (raise the limit only
+if the host can take it). `env` prints `export IRIX_RIG_DIR=<instance>`, which is
+what the shared scripts key off (`lib.sh`); `run` sets it for a single command.
+When the command goes through `nix develop`, pass `--keep IRIX_RIG_DIR`.
+
+An instance is a directory under `$IRIX_RIG_DIR/tasks/<task>` with its own
+socket, guest lock, NVRAM, scratch LUN, serial log and COW overlay, so any
+number run at once without collision. The emulator, media, oracle and the
+installed disk are symlinked from the base rig, never copied, and every write
+lands in the instance's own overlay. Because the installed disk is that shared
+base, the base rig must be stopped while tasks run; override with
+`IRIX_TASK_ALLOW_BASE_RUNNING=1` only when it is known cold. A base that has
+crashed leaves a stale socket and pid behind, so `start` tests liveness (a ping
+on the socket, or a verified-ours pid), not mere file existence.
+
+`start` seeds the instance's NVRAM from the base's once, so the PROM keeps the
+seeded `SystemPartition`/`OSLoadPartition`/`console=d` environment instead of
+reinitialising and dropping to the maintenance menu; a pre-existing instance
+NVRAM is left alone. Each instance also gets its own monitor and serial ports
+(derived from the task name, in the 20000+ range) because the default
+8888/8880/8881 are the base rig's; two instances on the defaults would fight
+over the monitor.
+
+**A freshly started instance is paused:** the emulator is up and the CI socket
+answers, but the CPU is idle and the serial log stays empty until a client
+starts it. Boot and log in (`iris-ci`, or `oracle-driver.py`'s `ensure-shell`)
+before expecting console output.
+
+The emulator's CI overlay is moved out of `/tmp` by `IRIS_COW_OVERLAY_DIR`
+(honoured by the `irix7/iris` fork), so it stays under `tasks/<task>/disks/`
+on the shared volume rather than being pid-named and ephemeral. `start` also
+titles the process `iris2[<task>]`, so `ps aux` shows which task each running
+emulator belongs to. A task's build outputs and evidence belong under
+`tasks/<task>/work/`.
 
 ## Socket identity
 

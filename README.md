@@ -2,7 +2,7 @@
 
 This repository is the hub of the IRIX 6.5 rebuild project.
 
-The project rebuilds IRIX 6.5.7m with a modern GCC. The first deliverable is the stock rebuild. It reproduces IRIX 6.5.7m from its own source tree with the new toolchain. The second deliverable is the modernised fork. It changes the rebuilt code to make a new IRIX-derived operating system.
+The project rebuilds IRIX 6.5.7m, then replaces it. The first deliverable is the stock rebuild: IRIX 6.5.7m reproduced in the guest with its own tools. The second is the modernised tree: the same OS rebuilt outside the guest with a modern GCC. The third is IRIX 7: a GPL-3.0 Rust reimplementation of the whole system.
 
 ## What is in this repository
 
@@ -62,18 +62,20 @@ scripts/smoke.sh --prefix .scratch/toolchain-16.2.0/prefix \
 | `docs/runtime.md` | The libc and libm rebuild |
 | `docs/binutils.md` | The binutils series and its evidence |
 | `docs/publication.md` | The publication boundary |
+| `docs/stack.md` | The full stack: host, cross GCC, Rust, IRIX 7 |
 | `docs/adr/` | The project decisions, numbered and dated |
 
 ## Related repositories
 
 | Repository | Role |
 | --- | --- |
-| `irix7/gcc` | The upstream GCC mirror (patch base) |
+| `irix7/gcc` | The IRIX GCC fork: `rust-lang/gcc` base (GCC 17 trunk + libgccjit) |
 | `irix7/binutils-gdb` | The binutils mirror and the IRIX dynamic-link patch |
 | `irix7/ghidra` | The Ghidra fork with IRIX support |
 | `irix7/irix6` | The IRIX 6.5.7m source tree (private) |
-| `irix7/iris2` | The Indy emulator fork (private) |
+| `irix7/iris` | The Indy emulator fork (fork of `techomancer/iris`) |
 | `irix7/harness` | The agent harness (planned) |
+| `irix7/os` | IRIX 7, the Rust-native OS (planned) |
 
 ## Publication policy
 

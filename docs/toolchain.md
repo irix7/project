@@ -303,8 +303,9 @@ captured 6.5.7m headers declare the recursive mutex type, `pthread_equal`,
 them out were dropped rather than replaced with a semantic no-op. The
 pthread entry points live in `/usr/lib/libpthread.so` and
 `/usr/lib32/libpthread.so`, which `scripts/rig/sysroot.files` now names so
-the next capture can link `-lpthread` (that capture also lets
-`build-toolchain.sh` build `libatomic` again).
+the next capture can link `-lpthread`. libatomic stays disabled regardless:
+the GCC 17 fork's IRIX specs still select the SGI-ld branch (issue #150),
+so its `AC_LINK_IFELSE` probe cannot pass against binutils 2.47's GNU ld.
 
 Two regressions keep the selection honest. The guest-free
 `scripts/rig/test-gthread-patch.py` checks the patch header and the applied

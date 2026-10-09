@@ -7,10 +7,11 @@ its stdout against the recorded oracle output. This is the deferred static
 proof of ADR-0006 and the runtime deliverable of issue #9; ADR-0007 records
 the static-first decision and why the rebuilt dynamic path is deferred.
 
-The tree is stock (ADR-0005): every MIPSpro-only construct is translated in
-the build's own copies of the sources (`scripts/runtime/compat.py`), never in
-the tree. The build runs inside the flake devshell because host `cc` and
-`m4` reproduce the tree's generated sources.
+Every MIPSpro-only construct is translated in the build's own copies of the
+sources (`scripts/runtime/compat.py`) rather than in the tree, as an interim
+path; source modernisation belongs on the modernised tree branch (ADR-0020).
+The build runs inside the flake devshell because host `cc` and `m4` reproduce
+the tree's generated sources.
 
 ## Result
 

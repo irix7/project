@@ -387,6 +387,41 @@ class IdentityHelperTest(TempDirTest):
         )
 
 
+class GccConfigureArgsTest(TempDirTest):
+    """The sysroot-dependent GCC configure arguments (issue #150)."""
+
+    ARGS_DRIVER = textwrap.dedent(
+        """\
+        set -euo pipefail
+        source "$1"
+        IRIX_SYSROOT="$2"
+        gcc_extra_configure_args
+        """
+    )
+
+    def _args(self, sysroot):
+        result = run_bash(self.ARGS_DRIVER, BUILD_TOOLCHAIN, sysroot)
+        return result.stdout.split()
+
+    def test_sysroot_build_builds_libatomic(self):
+        # The fork defines IRIX_USING_GNU_LD for IRIX (issue #150), so the
+        # non-shared target link probe passes and libatomic configures and
+        # builds; libgo's 32-bit atomics depend on it. The interim disable
+        # and the stale libpthread-proxy heuristic are both gone.
+        args = self._args("/capture")
+        self.assertIn("--with-sysroot=/capture", args)
+        self.assertNotIn("--disable-libatomic", args)
+        self.assertNotIn("--disable-libquadmath", args)
+
+    def test_no_sysroot_build_stays_freestanding(self):
+        args = self._args("")
+        self.assertIn("--without-headers", args)
+        self.assertIn("--disable-threads", args)
+        self.assertIn("--disable-libatomic", args)
+        self.assertIn("--disable-libquadmath", args)
+        self.assertFalse(any(a.startswith("--with-sysroot=") for a in args))
+
+
 class BuildToolchainEndToEndTest(TempDirTest):
     """Drive the real script's build functions with fake compilers."""
 

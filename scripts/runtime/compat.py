@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Stream translations for the IRIX tree's MIPSpro-era sources (issue #9).
 
-The runtime rebuild compiles SGI's stock sources with GCC 16.2. A few
-constructs the tree uses are MIPSpro-specific and need translating, the same
-way the flag tables translate MIPSpro options. None of this edits the tree:
-the translations happen in memory and the build writes its own copies.
+The runtime rebuild compiles SGI's stock sources with GCC. A few constructs the
+tree uses are MIPSpro-specific and need translating, the same way the flag
+tables translate MIPSpro options. The translations happen in memory and the
+build writes its own copies. This in-memory path is interim: source
+modernisation belongs on the modernised tree branch (ADR-0020).
 
 The constructs, each with the reason it exists:
 

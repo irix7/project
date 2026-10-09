@@ -76,10 +76,12 @@ The script's sysroot branch does two things the naive build needs: it
 configures binutils with the matching `--with-sysroot` (otherwise the `ld` it
 installs rejects the `--sysroot` the sysroot-configured GCC passes — its
 `--help` advertises the option either way, so GCC's configure is fooled), and
-it skips libatomic while the capture has `pthread.h` but not the o32 and n32
-`libpthread.so`. Both are handled there, so one command from a clean checkout
-gives the harness its cross; libatomic returns automatically once
-`sysroot.files` names `libpthread.so` and the sysroot is recaptured.
+it disables libatomic explicitly. libatomic's configure links a target
+executable, and the GCC 17 fork's IRIX specs pass SGI-ld flags
+(`-no_unresolved`) that binutils 2.47's GNU ld rejects because the spec's
+`IRIX_USING_GNU_LD` branch is never selected (issue #150); libatomic is not
+needed by the rebuild yet. Both are handled there, so one command from a
+clean checkout gives the harness its cross.
 
 ## Preconditions and exit behaviour
 

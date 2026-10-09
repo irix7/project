@@ -34,6 +34,10 @@
             gnumake
             bison
             flex
+            gperf
+            autoconf
+            automake
+            perl
             texinfo
             gawk
             m4

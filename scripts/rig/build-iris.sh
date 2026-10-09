@@ -2,10 +2,11 @@
 #
 # Build the rig's own IRIS emulator (issue #2).
 #
-# Clones techomancer/iris into the rig tree at a pinned commit and builds the
-# release binary with the `lightning` feature (pedal-to-the-metal interpreter:
-# no breakpoints or traceback updates, opcode fusion on). That is the build the
-# guest install and later smoke tests run under.
+# Clones the emulator fork (RIG_IRIS_REPO, irix7/iris) into the rig tree at the
+# pinned commit and builds the release binary with the `lightning` feature
+# (pedal-to-the-metal interpreter: no breakpoints or traceback updates, opcode
+# fusion on). That is the build the guest install and later smoke tests run
+# under.
 #
 # The Rust nightly comes from the rig-local RUSTUP_HOME (see lib.sh); the host
 # C toolchain and the libraries the Rust dependencies probe for come from the
@@ -121,6 +122,7 @@ if [ -d "$RIG_IRIS_DIR/.git" ]; then
 		rig_log "discarding local changes in $RIG_IRIS_DIR (--force-checkout)"
 	fi
 	rig_log "updating $RIG_IRIS_DIR"
+	git -C "$RIG_IRIS_DIR" remote set-url origin "$RIG_IRIS_REPO"
 	git -C "$RIG_IRIS_DIR" fetch --quiet --tags origin
 else
 	rig_log "cloning $RIG_IRIS_REPO"

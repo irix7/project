@@ -49,12 +49,13 @@ Link explicitly against the captured startfiles so PT_INTERP and RPATH match
 the reference (ADR-0006):
 
 ```sh
-$CC $LDFLAGS $SYSROOT/usr/lib32/crt1.o $SYSROOT/usr/lib32/crtn.o \
+$CC $LDFLAGS -nostartfiles $SYSROOT/usr/lib32/crt1.o $SYSROOT/usr/lib32/crtn.o \
     "${OBJS[@]}" -lc -lm -Wl,-I,$SYSROOT/usr/lib32/libc.so.1 -o <binary>
 ```
 
-The harness refuses a binary without PT_INTERP — a static case is not this
-seam (see ADR-0007).
+`-nostartfiles` is required: the cross GCC driver adds its own default
+crt1.o in addition to the explicit sysroot one, causing duplicate
+`_mcount`/`__start`/`__istart` definitions.
 
 ## The three things that actually bite
 
@@ -116,15 +117,17 @@ Ship the cross binary to a task instance and diff against the reference
 output; the reference captured both the rebuilt and the stock binary's stdout
 under `$RIG_ORACLE_DIR/<target>-reference/`.
 
-**Batch mode (iris ≥ 39d3d62):** `iris-ci batch FILE` (alias `script`) runs
-every step over one control-socket connection instead of connect/request/close
-per step. A differential test case (put program, put input, run cross, run
-reference, get output) collapses from 5 round-trips to 1. Add `--keep-going`
-to run past a failed step (the run still exits non-zero).
+**Batch mode (iris ≥ 39d3d62):** `iris-ci batch --keep-going <PATH>` (alias
+`script`) runs every step over ONE control-socket connection instead of
+connect/request/close per step. The CLI takes a **file path** (not stdin/heredoc).
+A differential test case (put program, put input, run cross, run reference,
+get output) collapses from 5 round-trips to 1. `--keep-going` runs past a
+failed step (the run still exits non-zero).
+
+Write one batch file per test case:
 
 ```sh
-eval "$(scripts/rig/task-rig.sh env <item>)"
-iris-ci batch --keep-going <<EOF
+cat > $OUT/t1.batch <<EOF
 put $OUT/t1.awk --to /var/tmp/dt/t1.awk
 put $OUT/t1.in  --to /var/tmp/dt/t1.in
 run "/var/tmp/nawk-fix -f /var/tmp/dt/t1.awk /var/tmp/dt/t1.in >& /var/tmp/dt/t1.gcc; echo IRIS-CI-RC=\$status"
@@ -132,8 +135,20 @@ run "/var/tmp/nawk-mipspro/nawk -f /var/tmp/dt/t1.awk /var/tmp/dt/t1.in >& /var/
 get /var/tmp/dt/t1.gcc --to $OUT/t1.gcc
 get /var/tmp/dt/t1.ref --to $OUT/t1.ref
 EOF
+iris-ci batch --keep-going $OUT/t1.batch
 diff $OUT/t1.gcc $OUT/t1.ref
 ```
+
+**`-nostartfiles`:** the cross GCC driver adds its own default crt1.o in
+addition to the explicit sysroot one, causing duplicate `_mcount`/`__start`/
+`__istart` definitions. Pass `-nostartfiles` when linking against the
+captured sysroot:
+
+```sh
+$CC $LDFLAGS -nostartfiles $SYSROOT/usr/lib32/crt1.o $SYSROOT/usr/lib32/crtn.o \
+    <objs> -lc -lm -Wl,-I,$SYSROOT/usr/lib32/libc.so.1 -o <binary>
+```
+
 
 ```sh
 eval "$(scripts/rig/task-rig.sh env <item>)"

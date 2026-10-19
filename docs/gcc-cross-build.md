@@ -206,3 +206,34 @@ Use a direct `run` line instead: `( cmd > out ) >& err`.
 `gcc -c x.c.debug` treats `.debug` as a linker input, not a C source.
 Use `-x c` for any debug copy of a source file.
 
+### `put` needs `mkdir -p` for the destination directory
+`put` fails if the target directory doesn't exist (e.g. `/var/tmp/dt`).
+Create it first:
+
+```sh
+run "mkdir -p /var/tmp/dt"
+```
+
+### ld/binutils mismatch: GCC run blocked for all N32 items
+`mips-sgi-irix6.5-ld` is **binutils 2.20.1 (2010)** paired with GCC 16.2 (2026).
+ld 2.20.1 emits a single **RWE** LOAD segment for N32 MIPS, while MIPSpro
+produces separate **R E** / **R W** segments. Attempts to force separate
+segments (custom linker script, `--max-page-size`, `-z separate-code`,
+`-n`/`-N`) all make ld 2.20.1 segfault. `gas` 2.20 also cannot emit a valid
+`MIPS_REGINFO` section, and the sysroot's MIPSpro `crt1.o` is runtime-broken
+with GCC's ld gp layout.
+
+**This blocks `GCC run` for every item until fixed.** Fix path (infrastructure,
+not per-item source):
+
+1. Build GCC 16.2 against the **binutils 2.47 fork** at
+   `irix7/binutils-gdb:irix7/irix-binutils-2.47` (already pushed,
+   commit `bacb6cc4` "MIPS: Restore IRIX 6.5 dynamic linking").
+2. Regenerate the cross toolchain so `mips-sgi-irix6.5-ld` is binutils 2.47.
+3. Re-attempt `GCC run` for all blocked items.
+
+Until then, `GCC run` is legitimately `blocked` — advance it to `blocked`
+(which is *not* terminal on the board) and move on. Items stall at GCC run
+pending the toolchain fix, but IRIX cc/IRIX run/GCC cc can still complete.
+
+

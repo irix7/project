@@ -22,7 +22,7 @@ export RIG_REPO_ROOT
 # The project's emulator fork; carries the CI COW-overlay relocation that the
 # per-task rigs (task-rig.sh) rely on via IRIS_COW_OVERLAY_DIR.
 RIG_IRIS_REPO=${RIG_IRIS_REPO:-https://github.com/irix7/iris}
-RIG_IRIS_COMMIT=${RIG_IRIS_COMMIT:-1528d703776cb19338c548888438ee22efc3405b}
+RIG_IRIS_COMMIT=${RIG_IRIS_COMMIT:-39d3d627b486cf69fc4da5cb530b54fc3b1fedf6}
 
 # Root of the rig tree. 6.2T is available on the shared volume; the disk image
 # is sparse until the install writes to it.

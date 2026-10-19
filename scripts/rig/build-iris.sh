@@ -61,6 +61,19 @@ RECEIPT="$RIG_STATE_DIR/build-iris.receipt"
 
 mkdir -p "$RIG_LOG_DIR" "$RIG_RUSTUP_HOME" "$RIG_CARGO_HOME" "$RIG_STATE_DIR"
 
+# Serialise builds. The emulator checkout, the rig-local Rust nightly and the
+# receipt are shared state, so two workers (or two task rigs) must not build
+# them at once: the first acquires the lock and builds; the rest wait, then
+# find the receipt current and reuse it. Held only for this run.
+if command -v flock >/dev/null 2>&1; then
+	exec 9>"$RIG_STATE_DIR/build-iris.lock"
+	if ! flock 9; then
+		rig_die "could not lock $RIG_STATE_DIR/build-iris.lock"
+	fi
+else
+	rig_log "warning: flock not found; building without a lock"
+fi
+
 # Seed the rig-local Rust nightly on first use. The nix rig shell carries
 # rustup, so this needs no system Rust.
 if ! compgen -G "$RIG_RUSTUP_HOME/toolchains/*/bin/cargo" >/dev/null; then

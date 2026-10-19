@@ -26,6 +26,9 @@
 #   --lcincludes STR  LCINCS override, e.g. for staged kernel-only headers
 #   --extra-files ..  extra tree-relative files to stage beside the source dir
 #   --no-run          build only; do not run the binaries
+#   --default         build the Makefile's default target, not --target's named
+#                     target (needed when the binary is only produced by default)
+#   --make-target NN  an explicit smake target when it differs from the binary
 #
 # Every guest transaction takes the rig's shared guest lock.
 #
@@ -44,6 +47,7 @@ LCINCS=
 EXTRA_FILES=()
 RUN_ARG=
 RUN=1
+USE_DEFAULT=
 
 usage() {
 	cat <<'EOF'
@@ -60,6 +64,8 @@ reference artefacts under $RIG_ORACLE_DIR/<target>-reference/.
   --extra-files ..  extra tree-relative files to stage (repeatable)
   --run-arg ARG     argument passed to both binaries when running
   --no-run          build only, do not run the binaries
+  --default         build the Makefile default rather than the named target
+  --make-target NN  explicit smake target when it differs from the binary
   -h, --help        this help
 EOF
 }
@@ -79,7 +85,11 @@ while [ $# -gt 0 ]; do
 		--extra-files) EXTRA_FILES+=("$2"); shift 2 ;;
 		--run-arg)     RUN_ARG=$2; shift 2 ;;
 		--no-run)      RUN=0; shift ;;
+		--default)     USE_DEFAULT=1; shift ;;
+		--make-target) MAKE_TARGET=$2; shift 2 ;;
+		--make-target=*) MAKE_TARGET=${1#*=}; shift ;;
 		-h|--help)     usage; exit 0 ;;
+		*) usage >&2; rig_die "unknown option: $1" ;;
 		*) usage >&2; rig_die "unknown option: $1" ;;
 	esac
 done
@@ -156,9 +166,25 @@ fi
 SM="\"CC=cc -v\""
 [ -n "$LCINCS" ] && SM="\"LCINCS=$LCINCS\" $SM"
 
-rig_log "building $TARGET with cc -v"
-ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM >& $GUEST_STAGE/smake.verbose.log" --timeout 1200
-ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM $TARGET.o >& $GUEST_STAGE/smake.object.log" --timeout 1200
+# Build the named target, not the Makefile default: the default often pulls in
+# extra products (awk's `troot` needs the non-shared crt files the 6.5.7m guest
+# install does not ship) that fail for reasons unrelated to this command and
+# would abort the whole reference capture under `set -e`. `--default` opts back
+# in; the binary is still pulled from the same path either way.
+MAKE_TARGET=${MAKE_TARGET:-$TARGET}
+if [ -n "$USE_DEFAULT" ]; then
+	MAKE_TARGET=
+fi
+if [ -n "$MAKE_TARGET" ] && [ "$MAKE_TARGET" != "$TARGET.o" ]; then
+	ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM $MAKE_TARGET >& $GUEST_STAGE/smake.verbose.log" --timeout 1200 || true
+else
+	ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM >& $GUEST_STAGE/smake.verbose.log" --timeout 1200
+fi
+if [ -n "$MAKE_TARGET" ] && [ "$MAKE_TARGET" != "$TARGET.o" ]; then
+	ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM $TARGET.o >& $GUEST_STAGE/smake.object.log" --timeout 1200 || true
+else
+	ic run "cd $GUEST_BUILD; env ROOT=/ smake $SM $TARGET.o >& $GUEST_STAGE/smake.object.log" --timeout 1200
+fi
 
 if [ "$RUN" -eq 1 ]; then
 	rig_log "running the rebuilt and stock $TARGET"

@@ -29,6 +29,11 @@ This is the accumulated context for every worker; it grows as the loop learns.
   `scripts/rig/task-rig.sh run <item> -- <cmd>...` does it for one command.
   A cap of `IRIX_TASK_MAX` (default 2) running instances is enforced because
   each emulator pins a core.
+- **The rig is shared and built once.** The emulator and the guest base are
+  one resource for every worker. `scripts/rig/build-iris.sh` and guest
+  provisioning take a lock, so concurrent workers wait and reuse the result
+  instead of racing the build — but building the rig is *setup*, not per-task
+  work: let the launch step build it once, then start your instance.
 - **The guest shell is csh.** Use `>&`/`>>&`, not `2>&1` (csh rejects it with
   "Ambiguous output redirect"), and `$status`, not `$?`. Send **one simple
   command per `iris-ci run`**: a csh syntax error aborts the line before the

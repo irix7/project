@@ -131,7 +131,6 @@ write_config() {
 	# own, parallel instances would fight over the monitor and serial ports.
 	sum=$(printf '%s' "$root" | cksum | cut -d' ' -f1)
 	mac=$(printf '08:00:69:57:%02x:%02x' $(((sum >> 8) & 0xff)) $((sum & 0xff)))
-	port_base=$(( 20000 + (sum % 1000) * 3 ))
 	cat >"$root/iris.toml" <<EOF
 # Per-task IRIX 6.5.7m instance (scripts/rig/task-rig.sh). Generated; edit
 # task-rig.sh, not this file, when the shape must change.
@@ -142,10 +141,6 @@ banks      = [128, 128, 0, 0]
 ci_socket  = "$root/iris.sock"
 nvram      = "$root/nvram.bin"
 serial_log = "$root/logs/serial.log"
-
-monitor_port  = $port_base
-serial_port_a = $((port_base + 1))
-serial_port_b = $((port_base + 2))
 
 [machine]
 cpu = "r4400"

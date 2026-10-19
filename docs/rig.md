@@ -177,6 +177,11 @@ if the host can take it). `env` prints `export IRIX_RIG_DIR=<instance>`, which i
 what the shared scripts key off (`lib.sh`); `run` sets it for a single command.
 When the command goes through `nix develop`, pass `--keep IRIX_RIG_DIR`.
 
+Building the rig itself is shared, serialised setup: `build-iris.sh` (the
+emulator checkout, the rig-local Rust nightly and the build receipt) and guest
+provisioning take a lock, so two workers cannot race them. A worker that arrives
+mid-build waits, then reuses the receipt. Do not run it per task.
+
 An instance is a directory under `$IRIX_RIG_DIR/tasks/<task>` with its own
 socket, guest lock, NVRAM, scratch LUN, serial log and COW overlay, so any
 number run at once without collision. The emulator, media, oracle and the

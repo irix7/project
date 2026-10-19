@@ -247,8 +247,11 @@ def in_progress_field(item):
 STEP_GUIDE = {
     "deco": [
         "Reconstruct lane: decompile the shipped binary to C.",
-        "Land the C under decompiled/ in irix7/irix6; keep evidence in the instance work/ dir.",
-        "Then the recompile lane runs on the recovered C.",
+        "The item is a command the tree has no source for (src=none) or a stub.",
+        "Land the recovered C under decompiled/ in irix7/irix6 and push that branch;",
+        "  keep evidence in the instance work/ dir. Then the recompile lane runs on it.",
+        "RECOMPILING AN OBJECT FILE IS NOT ENOUGH: the product's source must exist",
+        "  before IRIX cc can build it. If decompilation looks impossible, say so.",
     ],
     "IRIX cc": [
         "Stock rebuild: build the command natively with IRIX's own tools (MIPSpro cc/smake).",
@@ -256,21 +259,35 @@ STEP_GUIDE = {
         "scripts/rig/task-rig.sh start <item>   # private rig; the guest starts PAUSED",
         "Boot and log in before reading the serial log: iris-ci start, or scripts/rig/oracle-driver.py ensure-shell.",
         "Guest shell is csh: use >& / >>&, $status (not $?), and one simple command per iris-ci run.",
+        "scripts/rig/reference-build.sh --tree DIR --src-dir DIR --target NAME",
+        "  builds the named target and captures binary, objects, smake logs AND stdout.",
+        "  --make-target NN when the smake target differs from the binary (e.g. awk -> nawk).",
+        "  A failed extra sub-target (like awk's troot, which needs non-shared crt files",
+        "  the install does not ship) is not a failure of this item: rebuild the named target.",
         "Evidence (objects, binaries, build logs) -> the instance work/ dir.",
     ],
     "IRIX run": [
         "Run the rebuilt binary in the guest and capture stdout as the oracle.",
         "Diff it against the shipped binary; save both outputs in the instance work/ dir.",
+        "reference-build.sh already does both runs when --run is on; this field is the record of it.",
     ],
     "GCC cc": [
         "Modernised tree: build the same source with the mips-sgi-irix6.5 cross.",
+        "Read docs/gcc-cross-build.md FIRST: flag table, link line and the three failure modes.",
         "A clean build with no tree change is a valid outcome; if GCC-enabling change is needed",
-        "  it lands on a branch of irix7/irix6 (ADR-0020), never build-side translation.",
+        "  it lands on a branch of irix7/irix6 (ADR-0020) and is PUSHED, never build-side translation.",
+        "  FIXING THE SOURCE IS THE JOB HERE, not declaring the item blocked.",
+        "    - K&R function definitions/prototypes -> ANSI C (MIPSpro accepts them, GCC 16 does not)",
+        "    - implicit int returns are usually fine with -w; only definitions must be converted",
+        "    - yacc-era tools: bison emits an enum, not #define tokens; make generators read both",
+        "  Run inside `nix develop .#rig` and export LD_LIBRARY_PATH for the nix isl/gmp/mpfr/mpc,",
+        "  otherwise cc1 fails to load shared libraries.",
         "Use the native binary/objects and the smake logs from work/ as the reference.",
     ],
     "GCC run": [
-        "Run the cross-built binary in the guest; diff stdout against the oracle byte-for-byte (scripts/smoke.sh).",
-        "Prove the ELF shape with the cross readelf.",
+        "Run the cross-built binary in the guest; diff stdout against the oracle byte-for-byte.",
+        "Prove the ELF shape with the cross readelf (PT_INTERP must be present: dynamic link, ADR-0006).",
+        "Evidence (diff, readelf, guest stdout) -> the instance work/ dir before advancing.",
     ],
     "Rust": [
         "IRIX 7 stage: not part of the stock rebuild or the modernised tree. Mark n/a for now.",
@@ -281,6 +298,8 @@ REMINDERS = [
     "Board: advance completes one field and flips the item to Todo. For the next field use",
     '  scripts/board.py advance <item> --field "<FIELD>" --value done   (or claim, then advance).',
     "Set a field done only with evidence; a field you could not attempt is blocked or n/a, never done.",
+    "There is no giving up: a failing GCC build means FIX THE SOURCE on an irix7/irix6 branch,",
+    "  commit it, push it, then rebuild. 'blocked' is for genuinely impossible cases only.",
     "Report friction: doc/script gaps, ambiguity and busywork, with exact commands, in your final message.",
 ]
 

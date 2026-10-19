@@ -145,3 +145,64 @@ A byte-for-byte match (or, for a command whose only output is a usage message
 on stderr, two empty stdout files) is the evidence. Record the diff, the
 `readelf -l` PT_INTERP line and the guest stdout in the instance `work/`
 directory before advancing `GCC run`.
+
+## Environment friction and workarounds
+
+These are problems agents hit on the rig; they are not source bugs. Add
+workarounds here as they recur so each agent starts with them.
+
+### `put` does not reliably overwrite an existing guest file
+After re-staging, `cmp` can report the old content while `md5` of the host
+copy matches. Clean first:
+
+```sh
+iris-ci batch <<EOF
+run "rm -f /var/tmp/dt/t1.awk /var/tmp/dt/t1.in"
+put $OUT/t1.awk --to /var/tmp/dt/t1.awk
+put $OUT/t1.in  --to /var/tmp/dt/t1.in
+EOF
+```
+
+### The control socket can disappear for minutes
+`iris-ci` reports `connect: No such file or directory` while the emulator
+process is alive and spinning. This is stale-cache behaviour on the shared
+`/mnt/europa` volume. Wrap every batch call in a retry loop:
+
+```sh
+for i in $(seq 1 10); do
+  iris-ci batch --keep-going < batch.txt && break
+  sleep 20
+done
+```
+
+### `iris-ci batch` cannot quote multi-word commands cleanly
+It splits lines on whitespace and honours quotes but not `--`, so
+`run -- mkdir -p /x` fails. Always quote multi-word guest commands:
+
+```sh
+run "chmod 755 /var/tmp/dt/myscript"
+run "/var/tmp/dt/myscript arg1 arg2"
+```
+
+`put` also does **not** preserve the executable bit — stage scripts with a
+following `run "chmod 755 ..."` step.
+
+### Guest hangs block `iris-ci run` for its full timeout
+When a guest binary hangs, `iris-ci run` blocks until its `--timeout`
+(default 60 s) and Ctrl-C never reaches the shell. The only recovery is:
+
+```sh
+scripts/rig/task-rig.sh stop <item>
+scripts/rig/task-rig.sh start <item>
+eval "$(scripts/rig/task-rig.sh env <item>)"
+python3 scripts/rig/oracle-driver.py --socket "$RIG_SOCKET" --ic "$RIG_IRIS_CI" ensure-shell --quiet
+```
+
+### `>& file` fails inside `sh -c`
+`iris-ci run 'sh -c "cmd > out >& err"'` reports "bad file unit number".
+Use a direct `run` line instead: `( cmd > out ) >& err`.
+
+### Unknown source suffixes
+`gcc -c x.c.debug` treats `.debug` as a linker input, not a C source.
+Use `-x c` for any debug copy of a source file.
+

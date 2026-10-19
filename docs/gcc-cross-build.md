@@ -114,7 +114,26 @@ flex is a drop-in for the tree's `lex` calls (`flex -o lex.yy.c awk.lx.l`).
 
 Ship the cross binary to a task instance and diff against the reference
 output; the reference captured both the rebuilt and the stock binary's stdout
-under `$RIG_ORACLE_DIR/<target>-reference/`:
+under `$RIG_ORACLE_DIR/<target>-reference/`.
+
+**Batch mode (iris ≥ 39d3d62):** `iris-ci batch FILE` (alias `script`) runs
+every step over one control-socket connection instead of connect/request/close
+per step. A differential test case (put program, put input, run cross, run
+reference, get output) collapses from 5 round-trips to 1. Add `--keep-going`
+to run past a failed step (the run still exits non-zero).
+
+```sh
+eval "$(scripts/rig/task-rig.sh env <item>)"
+iris-ci batch --keep-going <<EOF
+put $OUT/t1.awk --to /var/tmp/dt/t1.awk
+put $OUT/t1.in  --to /var/tmp/dt/t1.in
+run "/var/tmp/nawk-fix -f /var/tmp/dt/t1.awk /var/tmp/dt/t1.in >& /var/tmp/dt/t1.gcc; echo IRIS-CI-RC=\$status"
+run "/var/tmp/nawk-mipspro/nawk -f /var/tmp/dt/t1.awk /var/tmp/dt/t1.in >& /var/tmp/dt/t1.ref; echo IRIS-CI-RC=\$status"
+get /var/tmp/dt/t1.gcc --to $OUT/t1.gcc
+get /var/tmp/dt/t1.ref --to $OUT/t1.ref
+EOF
+diff $OUT/t1.gcc $OUT/t1.ref
+```
 
 ```sh
 eval "$(scripts/rig/task-rig.sh env <item>)"

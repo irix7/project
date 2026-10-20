@@ -11,13 +11,18 @@ to ADR-0020, which says where the source change goes.
 |---|---|---|
 | native reference | `$RIG_ORACLE_DIR/<target>-reference/` | rig dir, never committed (ADR-0001) |
 | cross build evidence | `<repo>/.scratch/<target>-gcc/` | never committed |
-| GCC-enabling source change | branch of `irix7/irix6` | ADR-0020 |
+| GCC-enabling source change | branch of `irix7/irix6`, PR'd into `modern-c` | ADR-0020 |
 
 A clean cross build with **no tree change is a valid outcome**. When the modern
 compiler rejects the old source (K&R C, K&R prototypes, implicit int, yacc-era
-tools), the fix lands on a branch of `irix7/irix6` — pushed — and the board
-item records that branch. Build-side translation (`scripts/runtime/compat.py`)
-is an interim path, not the policy.
+tools), the fix lands on a branch of `irix7/irix6` — pushed — and PR'd into
+`modern-c` so each item picks up previous conversions. Build-side translation
+(`scripts/runtime/compat.py`) is an interim path, not the policy.
+
+**Branch off `modern-c`, not `main`:** each fix branch should be created from
+`irix6/modern-c` so it includes all prior ANSI conversions and toolchain fixes.
+When the fix is green, PR it back into `modern-c` (not `main`). `modern-c` is
+the integrating branch; `main` stays as the untouched stock tree.
 
 ## The recipe
 

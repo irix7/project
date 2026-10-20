@@ -171,9 +171,11 @@ Once an item's stock rebuild exists, build the same tree with the GCC cross
 (`mips-sgi-irix6.5`). The old IRIX sources do not satisfy a modern compiler, so
 this stage modernises the tree itself: GCC-enabling change — old-C constructs,
 makefile idioms, flags — lands on a branch of the private source tree
-`irix7/irix6`. The stream-translation tooling (`compat.py`, the flag table) is
-an interim path, not the direction (ADR-0020). The change stays build-enabling:
-no operating-system behaviour changes.
+`irix7/irix6`. **Branch off `irix6/modern-c`** so each item picks up all
+previous ANSI conversions and toolchain fixes; when green, PR back into
+`modern-c` (not `main`). The stream-translation tooling (`compat.py`, the flag
+table) is an interim path, not the direction (ADR-0020). The change stays
+build-enabling: no operating-system behaviour changes.
 
 - `GCC cc` = `done` when the cross build succeeds.
 - `GCC run` = `done` when the cross binary runs in the guest and its stdout

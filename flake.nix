@@ -121,6 +121,8 @@
 
             packages = hostTools ++ rigTools;
 
+            inherit (env) CC CXX GMP_PREFIX MPFR_PREFIX MPC_PREFIX ISL_PREFIX SSL_CERT_FILE;
+
             shellHook = ''
               # v4l2-sys-mit runs bindgen, which dlopens libclang and parses
               # the kernel uapi headers directly (not through the compiler).

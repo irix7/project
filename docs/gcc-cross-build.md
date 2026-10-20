@@ -349,3 +349,28 @@ If the stock binary exits nonzero (e.g. `getopt` exits 2 with no args),
 `set -e` aborts before capturing output. `--no-run` then aborts `ic get`-ing
 the never-created `.output`/`.stock.output` files. Workaround: run the
 binaries manually via `iris-ci` and capture the outputs yourself.
+
+### Binaries that block on stdin hang the guest
+
+`reference-build.sh --run` runs the rebuilt binary with no redirected stdin.
+Commands that read stdin when given no args (e.g. `cat`, `pr`) will block
+forever and can wedge the guest. Pass `--run-arg <file>` to give them input,
+e.g. `--run-arg /etc/hosts`. If the guest wedges, recover with:
+
+```sh
+scripts/rig/task-rig.sh stop <item>
+scripts/rig/task-rig.sh start <item>
+eval "$(scripts/rig/task-rig.sh env <item>)"
+python3 scripts/rig/oracle-driver.py --socket "$RIG_SOCKET" --ic "$RIG_IRIS_CI" ensure-shell --quiet
+```
+
+### Missing guest libraries
+
+The guest may lack libraries the tree links against (e.g. `libw.a` for
+`getwidth()`). Building the real library can be blocked by missing
+libc-internal headers (`_wchar.h`, `locale_attr.h`, `wchar.h`). Workaround:
+provide a minimal single-byte/C-locale stub compiled into the missing
+`.a`, install it on the guest at `/usr/lib32/<lib>.a` and mirror it into the
+host sysroot at `usr/lib32/<lib>.a`. This is a build-environment shim — do
+not commit it to the tree.
+

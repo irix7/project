@@ -15,32 +15,20 @@ the native reference. Practical companion to `docs/hinv-gcc.md` and ADR-0020.
 | Task instance root | `/mnt/europa/sgi-toolchain-scratch/rig/tasks/<slug>/` |
 | Captured sysroot | `/mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot` |
 | Oracle references | `/mnt/europa/sgi-toolchain-scratch/rig/oracle/<target>-reference/` |
-| GCC cross | `/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/bin/mips-sgi-irix6.5-gcc` |
-| Cross gcc wrapper | `/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/bin/` |
+| GCC cross (GCC 17 fork + binutils 2.47) | `/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-17.0.0/prefix/bin/mips-sgi-irix6.5-gcc` |
+| Cross gcc wrapper dir | `/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-17.0.0/prefix/bin/` |
+| Old toolchain (GCC 16.2 + binutils 2.20.1, deprecated) | `/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/` |
 
-## Environment prerequisites (every rig command)
+## Toolchain provenance
 
-All rig and cross-build commands run inside the nix rig dev shell:
+The cross toolchain is built from our own customised forks:
 
-```sh
-nix develop /home/matt/projects/sgi-toolchain-new.#rig -c bash
-```
+- **GCC**: `irix7/gcc` fork (`rust-lang/gcc` 17 trunk + 26 IRIX commits), built via `scripts/build-toolchain.sh --gcc fork`. The fork lives at `.scratch/rust-lang-gcc/` and is pushed to `irix7/gcc`.
+- **binutils**: `irix7/binutils-gdb` fork at branch `irix7/irix-binutils-2.47` (commit `bacb6cc4` "MIPS: Restore IRIX 6.5 dynamic linking"), built via the in-repo IRIX patch series in `patches/binutils-2.47/`.
 
-Inside that shell:
+**Do not use the old toolchain** (`toolchain-16.2.0/prefix`, GCC 16.2 + binutils 2.20.1). Its ld 2.20.1 emits a single RWE LOAD segment for N32 MIPS and segfaults when forced to emit separate segments — this blocks `GCC run` for items like `pwd` and `getopt`. The fork toolchain (GCC 17 + binutils 2.47.50) fixes this.
 
-```sh
-# 1. Put the cross gcc on PATH
-export PATH="/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/bin:$PATH"
-
-# 2. The cross gcc (cc1) needs nix-store isl/gmp/mpfr/mpc at run time.
-#    `nix develop .#rig` does NOT export these. Find them with:
-nix-store --query --references $(which mips-sgi-irix6.5-gcc) 2>/dev/null | grep -E 'gmp|mpfr|mpc|isl' | head -4
-# then set:
-export LD_LIBRARY_PATH="/nix/store/<gmp>/lib:/nix/store/<mpfr>/lib:/nix/store/<libmpc>/lib:/nix/store/<isl>/lib:${LD_LIBRARY_PATH:-}"
-```
-
-The cross gcc and `ld` are binutils 2.20.1 paired with GCC 16.2 — see the
-ld/binutils note below for GCC-run blocking.
+The old toolchain is kept only for bisecting; all new work uses the fork toolchain at `toolchain-17.0.0/prefix`.
 
 ## Where the work goes
 
@@ -92,7 +80,7 @@ Then cross-build on the host (no guest needed):
 ```sh
 cd /home/matt/projects/sgi-toolchain-new
 nix develop .#rig -c bash -c '
-export PATH="/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/bin:$PATH"
+export PATH="/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-17.0.0/prefix/bin:$PATH"
 export LD_LIBRARY_PATH="/nix/store/<gmp>/lib:/nix/store/<mpfr>/lib:/nix/store/<libmpc>/lib:/nix/store/<isl>/lib:${LD_LIBRARY_PATH:-}"
 SYSROOT=/mnt/europa/sgi-toolchain-scratch/rig/oracle/sysroot
 CC=mips-sgi-irix6.5-gcc

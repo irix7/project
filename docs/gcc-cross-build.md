@@ -221,6 +221,44 @@ Use a direct `run` line instead: `( cmd > out ) >& err`.
 `gcc -c x.c.debug` treats `.debug` as a linker input, not a C source.
 Use `-x c` for any debug copy of a source file.
 
+### Cross compiler runtime environment
+`nix develop .#rig` does **not** export GMP/MPFR/MPC/ISL paths and does
+**not** place the cross gcc on PATH. You must supply both manually:
+
+```sh
+export LD_LIBRARY_PATH="/nix/store/...-gmp-*/lib:/nix/store/...-mpfr-*/lib:/nix/store/...-libmpc-*/lib:/nix/store/...-isl-*/lib:${LD_LIBRARY_PATH:-}"
+export PATH="/home/matt/projects/sgi-toolchain-new/.scratch/toolchain-16.2.0/prefix/bin:$PATH"
+mips-sgi-irix6.5-gcc ...
+```
+
+### csh guest shell
+The guest shell is csh. Host bash expands `$status` (unbound variable),
+so wrap guest command strings in **single quotes** or escape as `\$status`.
+`2>&1`/`2>` are invalid in csh — use `>` or `>&` only. One simple command
+per `iris-ci run`.
+
+### ld rejects the `libc.so` symlink chain
+The sysroot's `libc.so → libc.so.1 → ../../lib32/libc.so.1` chain confuses
+bfd ld ("File in wrong format"). Link against the resolved
+`libc.so.1` instead:
+
+```sh
+$CC $LDFLAGS -nostartfiles -nostdlib $SYSROOT/usr/lib32/crt1.o \
+    $SYSROOT/usr/lib32/crtn.o <objs> -lc -lm \
+    -Wl,-I,$SYSROOT/usr/lib32/libc.so.1 -o <binary>
+```
+
+### `-march`/`-mabi` at link time too
+`-march=mips3 -mabi=n32` must be passed at **link** time as well as compile
+time — without it, collect2 defaults to o32 (`-melf32bsmip`) and ld rejects
+the N32 objects ("File in wrong format").
+
+### `reference-build.sh --run` aborts on nonzero stock exit
+If the stock binary exits nonzero (e.g. `getopt` exits 2 with no args),
+`set -e` aborts before capturing output. `--no-run` then aborts `ic get`-ing
+the never-created `.output`/`.stock.output` files. Workaround: run the
+binaries manually via `iris-ci` and capture the outputs yourself.
+
 ### `put` needs `mkdir -p` for the destination directory
 `put` fails if the target directory doesn't exist (e.g. `/var/tmp/dt`).
 Create it first:

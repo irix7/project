@@ -267,26 +267,40 @@ Create it first:
 run "mkdir -p /var/tmp/dt"
 ```
 
-### ld/binutils mismatch: GCC run blocked for all N32 items
-`mips-sgi-irix6.5-ld` is **binutils 2.20.1 (2010)** paired with GCC 16.2 (2026).
-ld 2.20.1 emits a single **RWE** LOAD segment for N32 MIPS, while MIPSpro
-produces separate **R E** / **R W** segments. Attempts to force separate
-segments (custom linker script, `--max-page-size`, `-z separate-code`,
-`-n`/`-N`) all make ld 2.20.1 segfault. `gas` 2.20 also cannot emit a valid
-`MIPS_REGINFO` section, and the sysroot's MIPSpro `crt1.o` is runtime-broken
-with GCC's ld gp layout.
+### ld/binutils mismatch: item-dependent, not universal
+`mips-sgi-irix6.5-ld` is binutils 2.20.1 paired with GCC 16.2. ld 2.20.1
+can emit a single **RWE** LOAD segment for N32 MIPS, and some items (e.g.
+`cal`) link and run cleanly despite this. Others (e.g. `pwd`, `getopt`)
+segfault at startup — attempts to force separate segments (custom linker
+script, `--max-page-size`, `-z separate-code`, `-n`/`-N`) make ld 2.20.1
+segfault. `gas` 2.20 also cannot emit a valid `MIPS_REGINFO` section, and
+the sysroot's MIPSpro `crt1.o` is runtime-broken with GCC's ld gp layout.
 
-**This blocks `GCC run` for every item until fixed.** Fix path (infrastructure,
-not per-item source):
+**GCC run is item-dependent:** advance to `blocked` only when the cross
+binary actually segfaults on the guest. Otherwise mark `done`. The fix is
+infrastructure (rebuild the cross toolchain against binutils 2.47,
+`irix7/binutils-gdb:irix7/irix-binutils-2.47`), not per-item source.
 
-1. Build GCC 16.2 against the **binutils 2.47 fork** at
-   `irix7/binutils-gdb:irix7/irix-binutils-2.47` (already pushed,
-   commit `bacb6cc4` "MIPS: Restore IRIX 6.5 dynamic linking").
-2. Regenerate the cross toolchain so `mips-sgi-irix6.5-ld` is binutils 2.47.
-3. Re-attempt `GCC run` for all blocked items.
+### MIPSpro cc licence
+The guest may carry only a WorkShop eval FlexLM feature, so native `cc`
+refuses to compile phases. Fix with `scripts/rig/oracle.sh patch` using a
+locally prepared 7.3 driver with the licence check removed (see
+`docs/oracle.md`). Neither the driver nor the licence is ever committed.
 
-Until then, `GCC run` is legitimately `blocked` — advance it to `blocked`
-(which is *not* terminal on the board) and move on. Items stall at GCC run
-pending the toolchain fix, but IRIX cc/IRIX run/GCC cc can still complete.
+### Missing guest headers
+The rig base image may lack headers the dev install doesn't ship (e.g.
+`/usr/include/msgs/uxsgicore.h`). Provision them on the guest **and** add
+them to the host sysroot so the cross build finds them.
+
+### `gettxt` fallback quirk
+This IRIX libc returns the literal `"Message not found!!"` for bare numeric
+msgids; it only falls back to the default string for `"catalog:message"`
+form (e.g. `uxsgicore:N`). Provision headers using the catalog form so
+`gettxt` returns English defaults.
+
+### `lib.sh` re-enables `set -euo pipefail`
+Sourcing `lib.sh` re-enables `set -euo pipefail`, which breaks inline
+`$IRIS_SOCKET` checks (unbound variable). Be defensive when composing rig
+commands.
 
 

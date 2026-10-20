@@ -250,6 +250,124 @@ class IncludeTest(unittest.TestCase):
         variables = evaluate(text, {}, include=lambda name: files.get(name))
         self.assertEqual(variables["B"], "/tree/x")
 
+    def test_unquoted_include_is_resolved_through_the_callback(self):
+        text = "include subs.defs\nA=after\n"
+        files = {"subs.defs": "B=from-include\n"}
+        variables = evaluate(text, {}, include=lambda name: files.get(name))
+        self.assertEqual(variables["B"], "from-include")
+        self.assertEqual(variables["A"], "after")
+
+
+class AssignmentTest(unittest.TestCase):
+    """Deferred ``=`` vs immediate ``:=`` assignment semantics (issue #37)."""
+
+    def test_deferred_equals_resolves_forward_references(self):
+        text = "X = $(Y)\nY = hello\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "hello")
+
+    def test_immediate_colonequals_does_not_resolve_forward_references(self):
+        text = "X := $(Y)\nY = hello\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "")
+
+    def test_deferred_equals_expands_at_reference_time(self):
+        text = "X = $(Y) world\nY = hello\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "hello world")
+
+    def test_colonequals_expands_immediately(self):
+        text = "Y = hello\nX := $(Y)\nY = changed\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "hello")
+        self.assertEqual(variables["Y"], "changed")
+
+    def test_question_equals_only_sets_if_undefined(self):
+        text = "X ?= first\nX ?= second\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "first")
+
+    def test_question_equals_does_not_override_existing(self):
+        text = "X = existing\nX ?= overridden\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "existing")
+
+    def test_plus_equals_appends_deferred_text(self):
+        text = "X = a\nX += $(Y)\nY = b\n"
+        variables = evaluate(text, {})
+        self.assertEqual(variables["X"], "a b")
+
+
+class ConditionQuotedTest(unittest.TestCase):
+    """Quoted-variable conditions must expand $(VAR) inside quotes (issue #37)."""
+
+    def test_quoted_variable_in_condition_expands(self):
+        text = '#if "$(FLAG)" == "on"\nA=yes\n#else\nA=no\n#endif\n'
+        self.assertEqual(evaluate(text, {"FLAG": "on"})["A"], "yes")
+        self.assertEqual(evaluate(text, {"FLAG": "off"})["A"], "no")
+
+    def test_quoted_undefined_variable_is_empty(self):
+        text = '#if "$(MISSING)" == ""\nA=yes\n#endif\n'
+        self.assertEqual(evaluate(text, {})["A"], "yes")
+
+
+class SubstitutionPerWordTest(unittest.TestCase):
+    """:S substitutes per word, not once across the whole string (issue #37)."""
+
+    def test_first_occurrence_in_each_word(self):
+        self.assertEqual(
+            expand("$(WORDS:S/a/b/)", {"WORDS": "apple banana"}),
+            "bpple bbnana",
+        )
+
+    def test_global_replaces_in_each_word(self):
+        self.assertEqual(
+            expand("$(WORDS:S/a/b/g)", {"WORDS": "apple banana"}),
+            "bpple bbnbnb",
+        )
+
+    def test_no_g_replaces_only_first_per_word(self):
+        self.assertEqual(
+            expand("$(WORDS:S/a/b/)", {"WORDS": "alpha gamma"}),
+            "blpha gbmma",
+        )
+
+
+class TargetTest(unittest.TestCase):
+    """Target and recipe parsing (issue #10)."""
+
+    def test_target_with_deps_and_recipe(self):
+        text = "hinv: hinv.o\n\thinvc -o hinv hinv.o\n"
+        result = evaluate(text, {})
+        self.assertEqual(result.targets["hinv"]["deps"], ["hinv.o"])
+        self.assertEqual(
+            result.targets["hinv"]["recipe"], ["hinvc -o hinv hinv.o"]
+        )
+
+    def test_target_without_deps(self):
+        text = "clean:\n\trm -f *.o\n"
+        result = evaluate(text, {})
+        self.assertEqual(result.targets["clean"]["deps"], [])
+        self.assertEqual(result.targets["clean"]["recipe"], ["rm -f *.o"])
+
+    def test_multiple_targets(self):
+        text = "one: one.c\n\tcc one.c\ntwo: two.c\n\tcc two.c\n"
+        result = evaluate(text, {})
+        self.assertEqual(result.targets["one"]["deps"], ["one.c"])
+        self.assertEqual(result.targets["two"]["deps"], ["two.c"])
+        self.assertEqual(result.targets["one"]["recipe"], ["cc one.c"])
+        self.assertEqual(result.targets["two"]["recipe"], ["cc two.c"])
+
+    def test_variables_and_targets_together(self):
+        text = (
+            "CC = cc\n"
+            "hinv: hinv.o\n"
+            "\t$(CC) -o hinv hinv.o\n"
+        )
+        result = evaluate(text, {})
+        self.assertEqual(result["CC"], "cc")
+        self.assertEqual(result.targets["hinv"]["recipe"], ["$(CC) -o hinv hinv.o"])
+
 
 if __name__ == "__main__":
     unittest.main()

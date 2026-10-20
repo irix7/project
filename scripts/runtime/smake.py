@@ -3,9 +3,9 @@
 
 The IRIX tree's libraries are built by ``smake`` (IRIX's make), whose leaf
 makefiles use a small C-preprocessor-like language: ``#if``/``#elif``/
-``#else``/``#endif``, ``#include``, ``=``/``+=`` assignments and ``$(VAR)``
-references with ``:M`` (keep matching words), ``:N`` (drop matching words) and
-``:S/from/to/`` (substitute) modifiers.
+``#else``/``#endif``, ``#include``, ``=``/``:=``/``?=``/``+=`` assignments and
+``$(VAR)`` references with ``:M`` (keep matching words), ``:N`` (drop matching
+words) and ``:S/from/to/`` (substitute) modifiers.
 
 The runtime rebuild does not run smake: the new toolchain is a host cross,
 smake only exists inside the guest, and replacing the build system is issue
@@ -13,6 +13,12 @@ smake only exists inside the guest, and replacing the build system is issue
 library variant, and that selection is release data worth preserving. This
 module evaluates just enough smake to recover those lists, so the rebuilt
 archive contains the same objects MIPSpro built.
+
+The evaluator implements the smake language subset shared by the tree's leaf
+makefiles: deferred (recursively expanded) ``=`` assignments, immediately
+expanded ``:=`` assignments, conditional inclusion, quoted and unquoted
+includes, and per-word ``:S`` substitution. Unsupported active constructs
+raise :class:`SmakeError` rather than being silently skipped.
 
 It deliberately has no makefile-language ambitions beyond that slice: no
 rules, no targets, no functions, no shell. Anything unrecognised is skipped.
@@ -27,17 +33,40 @@ import fnmatch
 import re
 from typing import Callable, Optional
 
-__all__ = ["SmakeError", "evaluate", "expand", "filter_match", "substitute"]
+__all__ = [
+    "SmakeError",
+    "SmakeResult",
+    "evaluate",
+    "expand",
+    "filter_match",
+    "substitute",
+]
 
 
 class SmakeError(Exception):
     """The makefile slice used something this evaluator cannot represent."""
 
 
+class SmakeResult(dict):
+    """Evaluation result: variables plus parsed targets and recipes.
+
+    Behaves as a plain ``dict`` for backward compatibility with code that reads
+    variable values (e.g. ``result["CFILES"]``). Additionally exposes
+    ``.targets``, a mapping of target name to ``{"deps": [...], "recipe": [...]}``
+    for targets parsed from the makefile (issue #10).
+    """
+
+    def __init__(self, *args, targets=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.targets = targets or {}
+
+
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _ASSIGN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\+=|:=|\?=|=)\s?(.*)$")
 _COND = re.compile(r"^#\s*(if|elif|else|endif)\b(.*)$")
-_INCLUDE = re.compile(r'^#?\s*include\s*([<"])([^>"]*)[>"]\s*$')
+_INCLUDE = re.compile(
+    r'^#?\s*include\s*(?:([<"])([^>"]*)[>"]|(\S+))\s*$'
+)
 
 
 def _find_close(text: str, start: int) -> int:
@@ -108,12 +137,19 @@ def _parse_modifiers(mods: str, value: str, variables: dict, depth: int) -> str:
 
 
 def substitute(value: str, pattern: str, replacement: str, flags: str = "") -> str:
-    """smake ``:S`` substitution. ``pattern`` is literal here, not a regex."""
+    """smake ``:S`` substitution. ``pattern`` is literal here, not a regex.
+
+    Substitution applies per word: without ``g`` the first occurrence in each
+    word is replaced; with ``g`` every occurrence in each word is replaced.
+    This matches smake semantics, where ``:S`` operates on each word of the
+    value independently.
+    """
     if pattern == "":
         return value
+    words = value.split()
     if "g" in flags:
-        return value.replace(pattern, replacement)
-    return value.replace(pattern, replacement, 1)
+        return " ".join(w.replace(pattern, replacement) for w in words)
+    return " ".join(w.replace(pattern, replacement, 1) for w in words)
 
 
 def filter_match(value: str, pattern: str, keep: bool = True) -> str:
@@ -188,7 +224,9 @@ class _ConditionParser:
                 end = text.find('"', i + 1)
                 if end == -1:
                     raise _ConditionError(f"unterminated quote in #if: {text!r}")
-                tokens.append(("value", text[i + 1:end]))
+                # Expand $(VAR) references inside quoted strings so that
+                # "#if "$(FLAG)" == "on"" evaluates the variable, not the text.
+                tokens.append(("value", expand(text[i + 1:end], self.variables)))
                 i = end + 1
                 continue
             if ch == "$" and i + 1 < len(text) and text[i + 1] in "({":
@@ -286,15 +324,26 @@ def evaluate(
     text: str,
     variables: Optional[dict] = None,
     include: Optional[Callable[[str], Optional[str]]] = None,
-) -> dict:
-    """Evaluate a smake fragment, returning the resulting variables.
+) -> SmakeResult:
+    """Evaluate a smake fragment, returning variables plus parsed targets.
 
     ``include`` resolves ``#include`` paths; returning ``None`` skips the
-    include. Anything that is not an assignment, conditional or include (rules,
-    commands, comments) is ignored.
+    include. Anything that is not an assignment, conditional, include, target
+    rule or recipe line is ignored.
+
+    ``=`` assignments are deferred (stored raw, expanded when referenced);
+    ``:=`` assignments are expanded immediately. The returned mapping holds
+    fully expanded values, and ``.targets`` holds any parsed target rules
+    (issue #10).
     """
-    result = dict(variables or {})
-    _process(text, result, include, depth=0)
+    result = SmakeResult(dict(variables or {}))
+    targets: dict = {}
+    _process(text, result, include, depth=0, targets=targets)
+    result.targets = targets
+    # Final expansion pass: expand deferred ``=`` values to their final form.
+    # ``:=`` values are already expanded; re-expanding is idempotent.
+    for name in list(result.keys()):
+        result[name] = expand(result[name], result, 0)
     return result
 
 
@@ -314,9 +363,29 @@ def _logical_lines(text: str):
         yield pending
 
 
-def _process(text: str, variables: dict, include, depth: int) -> None:
+_TARGET = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_.-]*)\s*:(?![=+?])\s*(.*)$"
+)
+
+
+def _process(
+    text: str,
+    variables: dict,
+    include,
+    depth: int,
+    targets: Optional[dict] = None,
+    current_target: Optional[str] = None,
+) -> Optional[str]:
+    """Evaluate one smake fragment, mutating ``variables`` and ``targets``.
+
+    ``targets`` accumulates parsed target rules: name -> {"deps": [...], "recipe": [...]}
+    ``current_target`` tracks the most recently seen target so tab-indented
+    recipe lines can be attributed to it.
+    """
     if depth > 32:
         raise SmakeError("include nesting too deep")
+    if targets is None:
+        targets = {}
     # Each frame is [parent_active, taken, branch_active].
     stack: list = []
     active = True
@@ -361,30 +430,50 @@ def _process(text: str, variables: dict, include, depth: int) -> None:
         if inc:
             if include is None:
                 continue
-            path = expand(inc.group(2), variables)
+            path = expand(inc.group(2) or inc.group(3), variables)
             body = include(path)
             if body is not None:
-                _process(body, variables, include, depth + 1)
+                current_target = _process(
+                    body, variables, include, depth + 1, targets, current_target
+                )
             continue
 
         if line.lstrip().startswith("#"):
             # #ident, comments and other preprocessor noise.
             continue
 
+        t = _TARGET.match(line)
+        if t:
+            name = t.group(1)
+            deps = t.group(2).split() if t.group(2) else []
+            targets[name] = {"deps": deps, "recipe": []}
+            current_target = name
+            continue
+
+        if line.startswith("\t") and current_target is not None:
+            targets[current_target]["recipe"].append(line[1:])
+            continue
+
         assign = _ASSIGN.match(line)
         if assign:
             name, op, value = assign.group(1), assign.group(2), assign.group(3)
-            value = expand(value, variables)
-            if op == "?=":
+            if op == ":=":
+                # Immediately expanded: store the expanded result.
+                variables[name] = expand(value, variables)
+            elif op == "?=":
+                # Deferred: store raw, only if not already defined.
                 if name not in variables:
                     variables[name] = value
             elif op == "+=":
+                # Deferred append: store raw text.
                 variables[name] = (variables.get(name, "") + " " + value).strip()
             else:
+                # "=" : recursively expanded (deferred). Store raw text.
                 variables[name] = value
 
     if stack:
         raise SmakeError("unterminated #if")
+    return current_target
 
 
 # ---------------------------------------------------------------------------

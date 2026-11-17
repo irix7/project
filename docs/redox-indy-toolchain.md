@@ -139,3 +139,28 @@ ELF-to-ECOFF converter is `irix7/redox` `tools/ecoff`.
 - New threads on n32: the stack pointer must be 16-byte aligned at the first
   call; relibc pushes seven 4-byte words for the thread start, so the
   trampoline realigns.
+
+## First boot on the real Indy (2026-11-17)
+
+- The lab dnsmasq has `dhcp-boot=irix7`. The PROM fetches the file named in
+  the BOOTP reply, so `boot -f bootp()redox` loads `irix7`. `make indy-netboot
+  INDY_TFTP_NAMES="redox irix7"` installs the Redox image under both names;
+  the sibling image is kept as `/var/lib/sgi-netboot/irix7.os-backup`.
+- The same dnsmasq has `dhcp-ignore=tag:!bootp`, so a DHCP client gets no
+  lease. The image falls back to 10.1.1.112/24 after 20 seconds.
+- iris runs a transparent cache model by default (`tcache`, part of `jitv2`).
+  Cache bugs do not show there. Run the gate with `IRIS_ARGS="--cache full"`
+  (and `--cpu r5000`) before trying real hardware.
+- With the full cache model the kernel stopped at its first kseg2 access with
+  exception 31 (VCED). An R4000/R4400 with a secondary cache raises VCED/VCEI
+  when a page is touched under a second virtual colour. The handler
+  invalidates the primary line (`Index_Store_Tag_D` with TagLo 0), runs
+  `Hit_Writeback_Inv_SD` on BadVAddr and returns.
+- The PROM console is usable from the kernel: system parameter block at
+  0xA0001000 (signature 0x53435241), firmware vector pointer at +0x20, `Write`
+  is entry 27, `GetMemoryDescriptor` 18, `GetEnvironmentVariable` 30. The PROM
+  is 32-bit o32: give it 16 bytes of argument space and save s0..s7, fp and gp
+  as 64 bits around the call. `ConsoleOut` is `serial(0)` or `video()`.
+- PROM memory descriptors on a 32 MiB Indy: free 0x08002000..0x08740000,
+  firmware temporary 0x08740000..0x08800000, free 0x08800000..0x0A000000.
+  Leave the firmware range alone while its console is in use.

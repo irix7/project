@@ -164,3 +164,25 @@ ELF-to-ECOFF converter is `irix7/redox` `tools/ecoff`.
 - PROM memory descriptors on a 32 MiB Indy: free 0x08002000..0x08740000,
   firmware temporary 0x08740000..0x08800000, free 0x08800000..0x0A000000.
   Leave the firmware range alone while its console is in use.
+
+## Real hardware findings (2026-11-18, R4600PC Indy, PROM 5.3 Rev B7)
+
+- PROM variables are usable through `GetEnvironmentVariable`: `cpufreq` is the
+  CPU clock in MHz (133 here; CP0 Count runs at half of it), `netaddr` is the
+  address BOOTP gave the PROM, `ConsoleOut` is `video()` or `serial(0)`.
+- 64-bit instructions need `Status.UX` in user mode. With UX set the CPU adds
+  base and offset in 64 bits, so the n32 thread pointer (TLS + 0x7000) must
+  stay below 0x80000000: user space ends at 0x7fff0000.
+- Kernel addresses stored in 64-bit slots must be sign-extended; a jump to
+  0x0000000088xxxxxx is an address error on real hardware.
+- The refill handler must `tlbp` before writing: a pair can already be in the
+  TLB with one invalid half, and a duplicate entry is undefined.
+- Cache handling that works on the R4600: write back and invalidate the data
+  cache on a trap from user mode before touching frames, again after the page
+  fault handler, and flush both caches before returning to user mode.
+- Z85C30: leave recovery time between accesses and bound the transmit wait.
+- Reboot: only the firmware's `Reboot` (vector entry 6) restarts the machine
+  properly. A jump to 0xBFC00000 and the MC SYSINIT bit both left the screen
+  dead.
+- std on Redox: `Command::output` polls two pipes and `poll()` returns
+  EOPNOTSUPP here; `/dev/null` must exist as a link to `/scheme/null`.

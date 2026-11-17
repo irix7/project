@@ -75,3 +75,53 @@ crate, so the C requirement shrinks to one file. The `cc` crate reads
 menu on the serial console, `iris-ci serial-send` types at it and
 `boot -f bootp()redox` loads an ECOFF `OMAGIC` image from `tftp_dir`. The
 ELF-to-ECOFF converter is `irix7/redox` `tools/ecoff`.
+
+## Additions, 2026-11-17 (relibc, std and the first userspace)
+
+### Building Rust `std` for the target
+
+- Copy `$(rustc --print sysroot)/lib/rustlib/src/rust/library` (32 MiB) and
+  add `libc = { path = ... }` under `[patch.crates-io]` in its `Cargo.toml`;
+  select the copy with `__CARGO_TESTS_ONLY_SRC_ROOT`. The libc crate needs
+  Redox `mcontext`/`ucontext` definitions for `mips64`.
+- Build with `-Zbuild-std=std,panic_abort`. Link with `rust-lld` directly:
+  `crt0.o`, `crti.o`, `-L<sysroot>/lib`, `-lc`. `std` on Redox also links
+  `-lgcc_s`; with no unwinder, a stub archive must define
+  `_Unwind_Backtrace`, `_Unwind_GetIP`, `_Unwind_GetIPInfo`,
+  `_Unwind_GetCFA` and `_Unwind_FindEnclosingFunction`.
+- cargo does not track a static library passed as a link argument. After
+  rebuilding `libc.a`, programs are not relinked unless something else
+  changes; put the archive's hash in the rustflags (`--cfg name="hash"`).
+- Size: a static `std` program is about 450 KiB with `opt-level=z`, fat LTO,
+  one codegen unit and stripped symbols (800 KiB to 1.6 MiB without).
+
+### relibc
+
+- `global_asm!(include_str!("x.S"))` has no C preprocessor: musl's n32
+  `setjmp.S`/`longjmp.S` carry `#ifndef __mips_soft_float` blocks that must
+  be removed for a soft-float build.
+- `objcopy --strip-symbol` refuses the core math symbols on MIPS (`named in
+  a relocation`); weaken them instead.
+- relibc's Makefile looks for rlibs in `release/deps`; current cargo puts
+  them under `release/build/<crate>/<hash>/out`.
+- relibc at a given commit locks a kernel commit for the `redox_syscall`
+  crate. Build the kernel from that commit: a newer kernel drops system
+  calls the libc still issues.
+
+### Byte order and alignment (big-endian n32)
+
+- A struct sent as `[u64]` words whose first member is a `u8` is read by its
+  consumers as `word0 as u8`. On big-endian the byte must be last in the
+  word. Found in `redox_syscall::StdFsCallMeta`.
+- Encoders using `to_ne_bytes` and decoders using `from_le_bytes` only agree
+  on little-endian machines.
+- MIPS traps on unaligned 64-bit loads (`ld` on an address that is 4 but not
+  8 aligned gives an address error). A libc that returns a pointer into a
+  packed byte buffer as `struct dirent *` works on x86 and faults here.
+
+### SGI PROM netboot
+
+- The PROM loads ECOFF only into its free-memory area. At `0x8804_0000` a
+  6,865,104-byte image loads and a 7,684,304-byte image fails with `Text
+  start 0x8040000, size 0x754000 doesn't fit in a FreeMemory area` (iris,
+  embedded IP24 PROM, 32 MiB).

@@ -125,3 +125,17 @@ ELF-to-ECOFF converter is `irix7/redox` `tools/ecoff`.
   6,865,104-byte image loads and a 7,684,304-byte image fails with `Text
   start 0x8040000, size 0x754000 doesn't fit in a FreeMemory area` (iris,
   embedded IP24 PROM, 32 MiB).
+
+### PROM autoboot over the network (checked on iris, 2026-11-17)
+
+- `setenv SystemPartition bootp()`, `setenv OSLoader redox`,
+  `setenv AutoLoad Yes`: power-on, and every jump to the PROM reset vector,
+  netboots the file `redox` with nothing typed.
+- The PROM will not autoload when its console cannot open and records
+  `NoAutoLoad=CONSOLE OPEN FAILED.` in the environment. Headless iris needs
+  `setenv console d` as well.
+- `init` at the Command Monitor returns to the maintenance menu; it does not
+  autoload. A reset does.
+- New threads on n32: the stack pointer must be 16-byte aligned at the first
+  call; relibc pushes seven 4-byte words for the thread start, so the
+  trampoline realigns.

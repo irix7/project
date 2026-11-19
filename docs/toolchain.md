@@ -5,9 +5,10 @@ GNU binutils 2.47 plus an in-repo GCC IRIX layer, carried as patch series
 against the upstream releases (CONTEXT.md's *patch series*). The selected
 binutils 2.47 IRIX series passes the controlled o32 and n32 guest smokes
 (see [binutils.md](binutils.md)); `--binutils 2.20.1` selects the unchanged
-pdaxrom-patched seed fallback. The default target is GCC 16.2.0, the
-project's chosen compiler (ADR-0002); `--gcc` selects the 15.3.0 or 15.2.0
-fallback recipe.
+pdaxrom-patched seed fallback. The default compiler is GCC 17.0.0 from the
+irix7/gcc fork (ADR-0019, which supersedes ADR-0002's 16.2 choice).
+`--gcc 16.2.0` selects the in-repo 16.2 series; `--gcc 15.3.0` or `15.2.0`
+selects the pdaxrom fallback recipe.
 
 The series is the source of truth, not a long-lived fork branch. Every patch
 keeps GCC's GPL; no SGI or licence-restricted material is published

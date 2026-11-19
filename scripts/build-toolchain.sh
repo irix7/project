@@ -2,13 +2,16 @@
 #
 # Build the IRIX 6.5 cross toolchain.
 #
-# By default this builds the GCC 16.2 IRIX port: the in-repo binutils 2.47
-# IRIX series plus the in-repo GCC 16.2 series (patches/gcc-16.2/), re-derived
-# from pdaxrom/irix-gcc tag 1.2's 15.2 IRIX diff:
+# By default this builds the GCC 17 IRIX port from the irix7/gcc fork (ADR-0019):
+# the rust-lang/gcc 17 trunk with the IRIX commits already in its history.
 #
 #   * binutils 2.47 with the in-repo IRIX series (patches/binutils-2.47/)
-#   * GCC 16.2.0 with the in-repo IRIX series
+#   * GCC 17.0.0 from the fork checkout (GCC_FORK_DIR), no patch series applied
 #   * the local patches/ deltas that a sysroot-less host needs
+#
+# `--gcc 16.2.0` selects the in-repo GCC 16.2 series (patches/gcc-16.2/), the
+# superseded ADR-0002 track, re-derived from pdaxrom/irix-gcc tag 1.2's 15.2
+# IRIX diff.
 #
 # `--binutils 2.20.1` selects the pdaxrom-patched seed fallback, kept
 # unchanged for bisecting and for reproducing pre-2.47 builds;
@@ -49,7 +52,7 @@
 #   --jobs N         parallel make jobs (default: number of CPUs)
 #   --sysroot DIR    target sysroot; enables libstdc++ if it is set
 #   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
-#   --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0 or 15.2.0
+#   --gcc VERSION    GCC release: 17.0.0 (default, the fork), 16.2.0, 15.3.0 or 15.2.0
 #   --binutils VER   binutils release: 2.47 (default, IRIX series) or 2.20.1
 #                    (pdaxrom patches, seed fallback)
 #   --clean          remove the work directory before building
@@ -79,7 +82,7 @@ BINUTILS_SHA256_2_20_1=71d37c96451333c5c0b84b170169fdcb138bbb27397dc06281905d971
 # GCC releases this script knows how to build. The sha256 values are
 # pinned against the official GNU release checksums
 # (https://gcc.gnu.org/pub/gcc/releases/gcc-<version>/sha512.sum).
-GCC_VERSION=${GCC_VERSION:-16.2.0}
+GCC_VERSION=${GCC_VERSION:-17.0.0}
 GCC_SHA256_16_2_0=e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 GCC_SHA256_15_3_0=fa59c1beef8995f27c4d71c1df227587189315d3e6faff1bb4306e61b0c530eb
 GCC_SHA256_15_2_0=438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e
@@ -136,13 +139,13 @@ CLEAN=0
 
 usage() {
 	cat <<'EOF'
-Build the IRIX 6.5 cross toolchain (patched binutils 2.47 + GCC 16.2.0 by
+Build the IRIX 6.5 cross toolchain (patched binutils 2.47 + GCC 17.0.0 by
 default) targeting mips-sgi-irix6.5 with big-endian o32, n32 and n64
 multilibs. Binutils 2.47 uses the in-repo IRIX series; --binutils 2.20.1
-selects the pdaxrom-patched seed fallback. The gcc-16.2 IRIX series is
-in-repo; --gcc selects the 15.3.0 or 15.2.0 pdaxrom fallback recipe, or
-`fork` to build the irix7/gcc 17-trunk fork directly (IRIX commits already
-in its history), adding `jit` for the libgccjit the Rust backend needs.
+selects the pdaxrom-patched seed fallback. GCC 17.0.0 builds the irix7/gcc
+fork (`fork`, `17` or `17.0.0`), whose IRIX commits are already in its
+history. --gcc 16.2.0 selects the in-repo gcc-16.2 series; 15.3.0 or 15.2.0
+select the pdaxrom fallback recipes.
 
 Usage: scripts/build-toolchain.sh [options]
 
@@ -152,7 +155,7 @@ Usage: scripts/build-toolchain.sh [options]
   --jobs N         parallel make jobs (default: number of CPUs)
   --sysroot DIR    target sysroot; enables libstdc++ if it is set
   --languages L    GCC languages (default: c, or c,c++ with a sysroot)
-  --gcc VERSION    GCC release: 16.2.0 (default), 15.3.0, 15.2.0, or 17/fork
+  --gcc VERSION    GCC release: 17.0.0 (default), 16.2.0, 15.3.0, 15.2.0, or 17/fork
                    (the irix7/gcc fork: rust-lang/gcc 17 trunk + the IRIX
                    commits + the patched libgccjit the Rust backend needs)
   --gcc-fork DIR   build from this GCC fork checkout (implies --gcc fork;
